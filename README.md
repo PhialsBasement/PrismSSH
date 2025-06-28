@@ -8,12 +8,16 @@ PrismSSH is a next-generation SSH client that combines terminal access, file man
 
 ## ✨ Features
 
+
 ### 🖥️ **Modern Terminal Experience**
 - Multiple concurrent SSH sessions with tab management
 - Crystal-clear terminal with customizable themes
 - Real-time connection status monitoring
 - Automatic reconnection on connection loss
 - Smart logout detection (user commands + server disconnects)
+  
+![prismssh](https://github.com/user-attachments/assets/dbeca8fd-d0ff-46b2-9a7e-2c9af9204f86)
+
 
 ### 📁 **Integrated SFTP Browser**
 - Drag & drop file transfers
@@ -28,6 +32,11 @@ PrismSSH is a next-generation SSH client that combines terminal access, file man
 - Load average and system uptime
 - Network interface monitoring
 - Color-coded performance indicators
+
+![image](https://github.com/user-attachments/assets/49756a52-4786-4dab-a8cc-5fd98b7fc923)
+![image](https://github.com/user-attachments/assets/dc9caad7-b8c4-4d18-aa45-d0a9f42a2aff)
+![image](https://github.com/user-attachments/assets/f2f26d9f-add1-4426-b981-69b222d21f0f)
+
 
 ### 🔐 **Secure Connection Management**
 - Encrypted password storage using industry-standard cryptography
