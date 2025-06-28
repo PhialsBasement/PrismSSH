@@ -1,0 +1,31 @@
+# Core Dependencies
+webview>=4.0.0
+paramiko>=3.0.0
+cryptography>=41.0.0
+
+# Optional Dependencies for Enhanced Features
+# Install with: pip install -r requirements.txt
+
+# Web Framework
+pywebview>=4.0.0
+
+# SSH and Cryptography
+paramiko>=3.0.0
+cryptography>=41.0.0
+
+# System Information (cross-platform compatibility)
+psutil>=5.9.0
+
+# Additional utilities
+typing-extensions>=4.0.0
+
+# Platform-specific dependencies (auto-installed as needed)
+# Windows
+pywin32>=306; sys_platform == "win32"
+
+# macOS
+pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"
+pyobjc-framework-WebKit>=9.0; sys_platform == "darwin"
+
+# Linux
+PyQt5>=5.15.0; sys_platform == "linux"
