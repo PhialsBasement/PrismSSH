@@ -1,0 +1,829 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app {
+    display: flex;
+    height: 100vh;
+    background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+}
+
+.sidebar {
+    width: 300px;
+    background: rgba(20, 20, 20, 0.9);
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    backdrop-filter: blur(10px);
+    overflow: hidden;
+}
+
+.logo {
+    padding: 20px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.logo h1 {
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #00d4ff 0%, #0099ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.sidebar-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.collapsible-section {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.section-header {
+    padding: 16px 24px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background 0.2s ease;
+    user-select: none;
+}
+
+.section-header:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #a0a0a0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.section-chevron {
+    width: 16px;
+    height: 16px;
+    transition: transform 0.3s ease;
+    color: #666;
+}
+
+.section-chevron.open {
+    transform: rotate(180deg);
+}
+
+.section-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+}
+
+.section-content.open {
+    max-height: 1000px;
+}
+
+.connect-form {
+    padding: 0 24px 24px 24px;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #a0a0a0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.form-group input, .form-group select {
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 14px;
+    transition: all 0.3s ease;
+}
+
+.form-group input:focus, .form-group select:focus {
+    outline: none;
+    border-color: #0099ff;
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 2px rgba(0, 153, 255, 0.1);
+}
+
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.checkbox-group input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+}
+
+.checkbox-group label {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 400;
+    color: #ccc;
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: pointer;
+}
+
+.connect-btn {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(135deg, #00d4ff 0%, #0099ff 100%);
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.connect-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 5px 15px rgba(0, 153, 255, 0.3);
+}
+
+.connect-btn:active {
+    transform: translateY(0);
+}
+
+.saved-connections {
+    padding: 0 16px 16px 16px;
+}
+
+.saved-connection-item {
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.saved-connection-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateX(2px);
+}
+
+.saved-connection-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.saved-connection-name {
+    font-weight: 500;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.saved-connection-details {
+    font-size: 11px;
+    color: #666;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.saved-connection-actions {
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    flex-shrink: 0;
+}
+
+.saved-connection-item:hover .saved-connection-actions {
+    opacity: 1;
+}
+
+.action-btn {
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    color: #fff;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.action-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.action-btn.delete {
+    color: #ff4444;
+    border-color: rgba(255, 68, 68, 0.3);
+}
+
+.action-btn.delete:hover {
+    background: rgba(255, 68, 68, 0.2);
+}
+
+input[type="checkbox"] {
+    accent-color: #0099ff;
+}
+
+.sessions-list {
+    padding: 0 16px 16px 16px;
+}
+
+.empty-message {
+    text-align: center;
+    color: #666;
+    padding: 20px;
+    font-size: 12px;
+}
+
+.sessions-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+
+.session-item {
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.session-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateX(4px);
+}
+
+.session-item.active {
+    background: rgba(0, 153, 255, 0.2);
+    border: 1px solid rgba(0, 153, 255, 0.3);
+}
+
+.session-item.disconnected {
+    background: rgba(255, 68, 68, 0.1);
+    border: 1px solid rgba(255, 68, 68, 0.2);
+    opacity: 0.7;
+}
+
+.session-item.disconnected:hover {
+    background: rgba(255, 68, 68, 0.15);
+    opacity: 1;
+}
+
+.session-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.session-status {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #00ff88;
+    box-shadow: 0 0 8px rgba(0, 255, 136, 0.5);
+}
+
+.session-info {
+    flex: 1;
+}
+
+.session-name {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.session-host {
+    font-size: 12px;
+    color: #666;
+}
+
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.content-area {
+    flex: 1;
+    display: flex;
+    position: relative;
+}
+
+.terminal-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.right-sidebar {
+    width: 0;
+    background: rgba(20, 20, 20, 0.9);
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    transition: width 0.3s ease;
+    overflow: hidden;
+}
+
+.right-sidebar.open {
+    width: 350px;
+}
+
+.tool-icons {
+    width: 48px;
+    background: rgba(10, 10, 10, 0.9);
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    padding: 8px 0;
+    gap: 4px;
+}
+
+.tool-icon {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    color: #666;
+}
+
+.tool-icon:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #fff;
+}
+
+.tool-icon.active {
+    background: rgba(0, 153, 255, 0.2);
+    color: #00d4ff;
+}
+
+.tool-icon svg {
+    width: 24px;
+    height: 24px;
+}
+
+.tool-tooltip {
+    position: absolute;
+    right: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(0, 0, 0, 0.9);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    margin-right: 8px;
+}
+
+.tool-icon:hover .tool-tooltip {
+    opacity: 1;
+}
+
+.tool-panel {
+    flex: 1;
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.tool-panel.active {
+    display: flex;
+}
+
+.tool-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.tool-title {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.tool-close {
+    width: 24px;
+    height: 24px;
+    cursor: pointer;
+    color: #666;
+    transition: color 0.2s ease;
+}
+
+.tool-close:hover {
+    color: #fff;
+}
+
+.tool-content {
+    flex: 1;
+    overflow: hidden;
+    padding: 16px;
+    position: relative;
+}
+
+/* SFTP File Browser Styles */
+.file-browser {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    flex-direction: column;
+}
+
+.file-path {
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-family: 'Consolas', monospace;
+    font-size: 13px;
+    color: #00d4ff;
+}
+
+.file-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.file-action-btn {
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.file-action-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.file-list-container {
+    flex: 1;
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.file-list {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.file-list.loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.file-browser-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: none;
+}
+
+.file-browser-loading.active {
+    display: block;
+}
+
+.file-browser-spinner {
+    width: 30px;
+    height: 30px;
+    border: 3px solid rgba(0, 153, 255, 0.1);
+    border-top-color: #0099ff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+.file-item {
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.file-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateX(2px);
+}
+
+.file-item.selected {
+    background: rgba(0, 153, 255, 0.2);
+    border: 1px solid rgba(0, 153, 255, 0.3);
+}
+
+.file-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+.file-name {
+    flex: 1;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-size {
+    font-size: 11px;
+    color: #666;
+    flex-shrink: 0;
+}
+
+.file-date {
+    font-size: 11px;
+    color: #666;
+    flex-shrink: 0;
+}
+
+.upload-area {
+    margin-top: 16px;
+    padding: 20px;
+    border: 2px dashed rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.upload-area.dragover {
+    background: rgba(0, 153, 255, 0.1);
+    border-color: #0099ff;
+}
+
+.upload-text {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.upload-button {
+    padding: 8px 16px;
+    background: linear-gradient(135deg, #00d4ff 0%, #0099ff 100%);
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.upload-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 5px 15px rgba(0, 153, 255, 0.3);
+}
+
+.tabs-container {
+    display: flex;
+    background: rgba(20, 20, 20, 0.6);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0 16px;
+    backdrop-filter: blur(10px);
+}
+
+.tab {
+    padding: 12px 24px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    font-size: 14px;
+    font-weight: 500;
+    color: #888;
+}
+
+.tab:hover {
+    color: #ccc;
+}
+
+.tab.active {
+    color: #fff;
+}
+
+.tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #00d4ff 0%, #0099ff 100%);
+}
+
+.terminal-container {
+    flex: 1;
+    padding: 24px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.terminal-wrapper {
+    flex: 1;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    position: relative;
+    padding: 8px;
+}
+
+#terminal {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* xterm.js specific styles - force full height */
+.xterm {
+    height: 100%;
+    width: 100%;
+}
+
+.xterm-viewport {
+    height: 100% !important;
+    width: 100% !important;
+}
+
+.xterm-screen {
+    height: 100% !important;
+    width: 100% !important;
+}
+
+.xterm-helpers {
+    height: 100% !important;
+}
+
+.welcome-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+}
+
+.welcome-icon {
+    font-size: 80px;
+    margin-bottom: 24px;
+    opacity: 0.2;
+}
+
+.welcome-title {
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, #00d4ff 0%, #0099ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.welcome-subtitle {
+    font-size: 16px;
+    color: #666;
+}
+
+.status-bar {
+    background: rgba(20, 20, 20, 0.9);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 8px 24px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    font-size: 12px;
+    color: #666;
+    backdrop-filter: blur(10px);
+    flex-shrink: 0;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.status-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #00ff88;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Loading animation */
+.connecting {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+.spinner {
+    width: 50px;
+    height: 50px;
+    border: 3px solid rgba(0, 153, 255, 0.1);
+    border-top-color: #0099ff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 16px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}

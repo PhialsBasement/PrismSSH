@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>PrismSSH - Modern SSH Client</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/xterm@5.3.0/css/xterm.css">
+    <script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://unpkg.com/@xterm/addon-fit@0.8.0/lib/addon-fit.js"></script>
+    <style>
+        /* Inline fallback CSS in case external file isn't loaded */
+        body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #e0e0e0; margin: 0; }
+        .app { display: flex; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <div class="sidebar">
+            <div class="logo">
+                <h1>PrismSSH</h1>
+            </div>
+            
+            <div class="sidebar-content">
+                <!-- New Connection Section -->
+                <div class="collapsible-section">
+                    <div class="section-header" onclick="toggleSection('newConnection')">
+                        <span class="section-title">New Connection</span>
+                        <svg class="section-chevron open" id="newConnectionChevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                    </div>
+                    <div class="section-content open" id="newConnectionContent">
+                        <div class="connect-form">
+                            <div class="form-group">
+                                <label>Hostname</label>
+                                <input type="text" id="hostname" placeholder="example.com" />
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Port</label>
+                                <input type="number" id="port" placeholder="22" value="22" />
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Username</label>
+                                <input type="text" id="username" placeholder="root" />
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Authentication</label>
+                                <select id="authType">
+                                    <option value="password">Password</option>
+                                    <option value="key">Private Key</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group" id="passwordGroup">
+                                <label>Password</label>
+                                <input type="password" id="password" placeholder="••••••••" />
+                            </div>
+                            
+                            <div class="form-group" id="keyGroup" style="display: none;">
+                                <label>Private Key Path</label>
+                                <input type="text" id="keyPath" placeholder="/path/to/key" />
+                            </div>
+                            
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="saveConnection" />
+                                <label for="saveConnection">Save connection</label>
+                            </div>
+                            
+                            <button class="connect-btn" onclick="connect()">
+                                Connect
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Saved Connections Section -->
+                <div class="collapsible-section">
+                    <div class="section-header" onclick="toggleSection('savedConnections')">
+                        <span class="section-title">Saved Connections</span>
+                        <svg class="section-chevron open" id="savedConnectionsChevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                    </div>
+                    <div class="section-content open" id="savedConnectionsContent">
+                        <div class="saved-connections">
+                            <div id="savedConnectionsList"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Active Sessions Section -->
+                <div class="collapsible-section">
+                    <div class="section-header" onclick="toggleSection('activeSessions')">
+                        <span class="section-title">Active Sessions</span>
+                        <svg class="section-chevron" id="activeSessionsChevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                    </div>
+                    <div class="section-content" id="activeSessionsContent">
+                        <div class="sessions-list">
+                            <div id="sessionsList"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="tabs-container" id="tabsContainer" style="display: none;">
+            </div>
+            
+            <div class="content-area">
+                <div class="terminal-section">
+                    <div class="terminal-container">
+                        <div id="welcomeScreen" class="welcome-screen">
+                            <div class="welcome-icon">🚀</div>
+                            <div class="welcome-title">Welcome to PrismSSH</div>
+                            <div class="welcome-subtitle">Connect to a server to get started</div>
+                        </div>
+                        
+                        <div id="terminalWrapper" class="terminal-wrapper" style="display: none;">
+                            <div id="terminal"></div>
+                        </div>
+                        
+                        <div id="connectingScreen" class="connecting" style="display: none;">
+                            <div class="spinner"></div>
+                            <div>Connecting...</div>
+                        </div>
+                    </div>
+                    
+                    <div class="status-bar" id="statusBar" style="display: none;">
+                        <div class="status-item">
+                            <div class="status-indicator"></div>
+                            <span>Connected</span>
+                        </div>
+                        <div class="status-item">
+                            <span id="statusHost">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="right-sidebar" id="rightSidebar">
+                    <!-- Tool Panels -->
+                    <div class="tool-panel" id="sftpPanel">
+                        <div class="tool-header">
+                            <div class="tool-title">SFTP File Browser</div>
+                            <svg class="tool-close" onclick="closeToolPanel()" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </div>
+                        <div class="tool-content">
+                            <div class="file-browser">
+                                <div class="file-path" id="currentPath">/home/user</div>
+                                <div class="file-actions">
+                                    <button class="file-action-btn" onclick="navigateUp()">⬆ Up</button>
+                                    <button class="file-action-btn" onclick="refreshFiles()">🔄 Refresh</button>
+                                    <button class="file-action-btn" onclick="createNewFolder()">📁 New Folder</button>
+                                </div>
+                                <div class="file-list-container">
+                                    <div class="file-list" id="fileList">
+                                        <!-- Files will be populated here -->
+                                    </div>
+                                    <div class="file-browser-loading" id="fileBrowserLoading">
+                                        <div class="file-browser-spinner"></div>
+                                    </div>
+                                </div>
+                                <div class="upload-area" id="uploadArea">
+                                    <div class="upload-text">Drag files here or</div>
+                                    <button class="upload-button" onclick="selectFiles()">Browse Files</button>
+                                    <input type="file" id="fileInput" style="display: none;" multiple onchange="handleFileSelect(event)">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="tool-panel" id="portForwardPanel">
+                        <div class="tool-header">
+                            <div class="tool-title">Port Forwarding</div>
+                            <svg class="tool-close" onclick="closeToolPanel()" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </div>
+                        <div class="tool-content">
+                            <div style="text-align: center; color: #666; padding: 40px;">
+                                Port forwarding coming soon...
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="tool-panel" id="monitorPanel">
+                        <div class="tool-header">
+                            <div class="tool-title">System Monitor</div>
+                            <svg class="tool-close" onclick="closeToolPanel()" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </div>
+                        <div class="tool-content">
+                            <div style="text-align: center; color: #666; padding: 40px;">
+                                System monitoring coming soon...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Tool Icons Bar -->
+                <div class="tool-icons">
+                    <div class="tool-icon" onclick="openTool('sftp')" id="sftpIcon">
+                        <span class="tool-tooltip">SFTP Browser</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+                            <polyline points="13 2 13 9 20 9"/>
+                        </svg>
+                    </div>
+                    <div class="tool-icon" onclick="openTool('portForward')" id="portForwardIcon">
+                        <span class="tool-tooltip">Port Forwarding</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                            <path d="M12 16l4-4-4-4M16 12H8"/>
+                        </svg>
+                    </div>
+                    <div class="tool-icon" onclick="openTool('monitor')" id="monitorIcon">
+                        <span class="tool-tooltip">System Monitor</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Inline fallback JS in case external file isn't loaded
+        console.log('PrismSSH template loaded');
+    </script>
+</body>
+</html>
