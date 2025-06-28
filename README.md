@@ -254,7 +254,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - 🐛 **Bug Reports**: [GitHub Issues](https://github.com/PhialsBasement/PrismSSH/issues)
 - 💡 **Feature Requests**: [Discussions](https://github.com/PhialsBasement/PrismSSH/discussions)
-- 💬 **Community**: [Discord Server](https://discord.gg/prismssh)
 - 📧 **Email**: support@prismssh.dev
 
 ---
