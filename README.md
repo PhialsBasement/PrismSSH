@@ -4,7 +4,7 @@
 
 PrismSSH is a next-generation SSH client that combines terminal access, file management, and system monitoring in one elegant desktop application. Built with Python and modern web technologies, it offers a sleek alternative to traditional SSH clients.
 
-![PrismSSH Screenshot](https://via.placeholder.com/800x500/0a0a0a/00d4ff?text=PrismSSH+Demo)
+![PrismSSH Screenshot](https://github.com/user-attachments/assets/6b24a004-810e-4a2a-a0ed-d2b7347191b1)
 
 ## ✨ Features
 
