@@ -254,6 +254,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Made with ❤️ by the PrismSSH team**
 
-[Website](https://prismssh.dev) • [Documentation](https://docs.prismssh.dev) • [Community](https://discord.gg/prismssh)
+[Website](https://prismssh.dev)
 
 </div>
