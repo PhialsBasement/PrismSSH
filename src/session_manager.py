@@ -23,13 +23,24 @@ class SSHSessionManager:
         self.logger = Logger.get_logger(__name__)
         self.sessions: Dict[str, SSHSession] = {}
         self.next_id = 1
+        self.host_key_verify_callback = None
+        self.pending_verifications: Dict[str, Dict[str, str]] = {}
+        
+    def set_host_key_verify_callback(self, callback):
+        """Set the callback for host key verification."""
+        self.host_key_verify_callback = callback
         
     def create_session(self) -> str:
         """Create a new session and return its ID."""
         session_id = f"session_{self.next_id}"
         self.next_id += 1
         
-        self.sessions[session_id] = SSHSession(session_id, self.config)
+        # Pass the host key verification callback to the session
+        self.sessions[session_id] = SSHSession(
+            session_id, 
+            self.config,
+            self.host_key_verify_callback
+        )
         self.logger.info(f"Created session {session_id}")
         return session_id
     

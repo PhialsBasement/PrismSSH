@@ -27,6 +27,24 @@ class PrismSSHAPI:
         self.session_manager = SSHSessionManager(config)
         self.connection_store = ConnectionStore(config)
         
+        # Set up host key verification callback
+        self.session_manager.set_host_key_verify_callback(self._handle_host_key_verification)
+        self.pending_verifications = {}
+        
+        # Track download progress and cancellation
+        self.download_progress = {}
+        self.download_cancellations = {}
+        
+        # Set up file watcher for edited files
+        try:
+            from .file_watcher import FileWatcher
+            self.file_watcher = FileWatcher(self._sync_file_callback)
+            self.file_watcher.start()
+        except ImportError:
+            from file_watcher import FileWatcher
+            self.file_watcher = FileWatcher(self._sync_file_callback)
+            self.file_watcher.start()
+        
         self.logger.info("PrismSSH API initialized")
     
     def create_session(self) -> str:
@@ -212,7 +230,832 @@ class PrismSSHAPI:
             self.logger.error(f"API: Error creating directory {path}: {e}")
             return json.dumps({'success': False, 'error': str(e)})
     
+    def delete_file(self, session_id: str, path: str) -> str:
+        """Delete a file via SFTP."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            success = session.delete_file(path)
+            return json.dumps({'success': success})
+        except Exception as e:
+            self.logger.error(f"API: Error deleting file {path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def delete_directory(self, session_id: str, path: str) -> str:
+        """Delete a directory via SFTP."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            success = session.delete_directory(path)
+            return json.dumps({'success': success})
+        except Exception as e:
+            self.logger.error(f"API: Error deleting directory {path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def rename_file(self, session_id: str, old_path: str, new_path: str) -> str:
+        """Rename/move a file via SFTP."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            success = session.rename_file(old_path, new_path)
+            return json.dumps({'success': success})
+        except Exception as e:
+            self.logger.error(f"API: Error renaming file {old_path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def upload_file_content(self, session_id: str, file_content: str, remote_path: str) -> str:
+        """Upload file content via SFTP."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            # Decode base64 content
+            import base64
+            file_bytes = base64.b64decode(file_content)
+            success = session.upload_file_content(file_bytes, remote_path)
+            return json.dumps({'success': success})
+        except Exception as e:
+            self.logger.error(f"API: Error uploading file content to {remote_path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def download_file_content(self, session_id: str, remote_path: str) -> str:
+        """Download file content via SFTP."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            file_bytes = session.download_file_content(remote_path)
+            
+            # Encode as base64 for transfer
+            import base64
+            file_content = base64.b64encode(file_bytes).decode('utf-8')
+            
+            return json.dumps({
+                'success': True, 
+                'content': file_content,
+                'size': len(file_bytes)
+            })
+        except Exception as e:
+            self.logger.error(f"API: Error downloading file content from {remote_path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def edit_file(self, session_id: str, remote_path: str) -> str:
+        """Download file for editing and return temp file path."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            # Download file content
+            file_bytes = session.download_file_content(remote_path)
+            
+            # Create temp file
+            import tempfile
+            import os
+            from pathlib import Path
+            
+            # Get file extension to preserve it
+            file_name = Path(remote_path).name
+            suffix = Path(file_name).suffix or '.txt'
+            
+            # Create temp file with proper extension
+            temp_fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix=f"prism_edit_{file_name}_")
+            
+            try:
+                # Write content to temp file
+                with os.fdopen(temp_fd, 'wb') as temp_file:
+                    temp_file.write(file_bytes)
+                
+                # Store mapping for later upload
+                if not hasattr(self, 'edit_mappings'):
+                    self.edit_mappings = {}
+                
+                self.edit_mappings[temp_path] = {
+                    'session_id': session_id,
+                    'remote_path': remote_path,
+                    'original_mtime': os.path.getmtime(temp_path)
+                }
+                
+                # Add file to watcher
+                self.file_watcher.add_file(temp_path)
+                
+                self.logger.info(f"Created temp file for editing: {temp_path}")
+                
+                return json.dumps({
+                    'success': True, 
+                    'temp_path': temp_path,
+                    'file_name': file_name
+                })
+                
+            except Exception as e:
+                # Clean up temp file if something went wrong
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+                raise
+                
+        except Exception as e:
+            self.logger.error(f"API: Error creating temp file for {remote_path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def sync_edited_file(self, temp_path: str) -> str:
+        """Sync edited temp file back to server."""
+        try:
+            if not hasattr(self, 'edit_mappings') or temp_path not in self.edit_mappings:
+                return json.dumps({'success': False, 'error': 'File mapping not found'})
+            
+            mapping = self.edit_mappings[temp_path]
+            session = self.session_manager.get_session(mapping['session_id'])
+            
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            import os
+            
+            # Check if file was modified
+            current_mtime = os.path.getmtime(temp_path)
+            if current_mtime <= mapping['original_mtime']:
+                return json.dumps({'success': True, 'message': 'No changes detected'})
+            
+            # Read updated content
+            with open(temp_path, 'rb') as f:
+                file_bytes = f.read()
+            
+            # Upload back to server
+            success = session.upload_file_content(file_bytes, mapping['remote_path'])
+            
+            if success:
+                # Update the modification time
+                mapping['original_mtime'] = current_mtime
+                self.logger.info(f"Synced edited file: {mapping['remote_path']}")
+                return json.dumps({'success': True, 'message': 'File synced to server'})
+            else:
+                return json.dumps({'success': False, 'error': 'Failed to upload to server'})
+                
+        except Exception as e:
+            self.logger.error(f"API: Error syncing edited file {temp_path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def _sync_file_callback(self, temp_path: str):
+        """Callback for file watcher when a file is modified."""
+        try:
+            self.logger.info(f"File watcher detected change in: {temp_path}")
+            result = self.sync_edited_file(temp_path)
+            response = json.loads(result)
+            
+            if response.get('success'):
+                self.logger.info(f"Auto-synced file: {temp_path}")
+            else:
+                self.logger.warning(f"Failed to auto-sync file {temp_path}: {response.get('error')}")
+                
+        except Exception as e:
+            self.logger.error(f"Error in file sync callback for {temp_path}: {e}")
+    
+    def cleanup_temp_file(self, temp_path: str) -> str:
+        """Clean up temporary edit file."""
+        try:
+            import os
+            
+            # Remove from file watcher
+            self.file_watcher.remove_file(temp_path)
+            
+            # Remove from mappings
+            if hasattr(self, 'edit_mappings') and temp_path in self.edit_mappings:
+                del self.edit_mappings[temp_path]
+            
+            # Delete temp file
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+                self.logger.info(f"Cleaned up temp file: {temp_path}")
+            
+            return json.dumps({'success': True})
+            
+        except Exception as e:
+            self.logger.error(f"API: Error cleaning up temp file {temp_path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def download_file_to_path(self, session_id: str, remote_path: str, local_path: str) -> str:
+        """Download file directly to specified local path with progress tracking."""
+        try:
+            import time
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            # Create progress tracking for this direct download
+            progress_key = f"{session_id}:direct_{int(time.time())}"
+            self.download_progress[progress_key] = {
+                'downloaded': 0,
+                'total': 0,
+                'percentage': 0,
+                'status': 'downloading',
+                'error': None
+            }
+            
+            def progress_callback(downloaded, total, percentage):
+                self.download_progress[progress_key] = {
+                    'downloaded': downloaded,
+                    'total': total,
+                    'percentage': percentage,
+                    'status': 'downloading',
+                    'error': None
+                }
+            
+            # Use the session's download_file method with progress tracking
+            success = session.download_file(remote_path, local_path, progress_callback)
+            
+            # Clean up progress tracking
+            if progress_key in self.download_progress:
+                del self.download_progress[progress_key]
+            
+            if success:
+                return json.dumps({'success': True, 'message': f'File downloaded to {local_path}'})
+            else:
+                return json.dumps({'success': False, 'error': 'Download failed'})
+                
+        except Exception as e:
+            self.logger.error(f"API: Error downloading file {remote_path} to {local_path}: {e}")
+            # Clean up progress tracking on error
+            if 'progress_key' in locals() and progress_key in self.download_progress:
+                del self.download_progress[progress_key]
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def start_direct_download_with_progress(self, session_id: str, remote_path: str, local_path: str, download_id: str) -> str:
+        """Start a direct download to path with REAL progress tracking."""
+        try:
+            import threading
+            
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            # Initialize progress tracking
+            progress_key = f"{session_id}:{download_id}"
+            self.download_progress[progress_key] = {
+                'downloaded': 0,
+                'total': 0,
+                'percentage': 0,
+                'status': 'starting',
+                'error': None
+            }
+            self.download_cancellations[progress_key] = False
+            
+            def progress_callback(downloaded, total, percentage):
+                # Check for cancellation FIRST before updating progress
+                if self.download_cancellations.get(progress_key, False):
+                    self.download_progress[progress_key]['status'] = 'cancelled'
+                    raise Exception("Download cancelled by user")
+                
+                self.download_progress[progress_key] = {
+                    'downloaded': downloaded,
+                    'total': total,
+                    'percentage': percentage,
+                    'status': 'downloading',
+                    'error': None
+                }
+            
+            def download_thread():
+                try:
+                    self.download_progress[progress_key]['status'] = 'downloading'
+                    
+                    # Use direct file download - no content transfer through memory
+                    success = session.download_file(remote_path, local_path, progress_callback)
+                    
+                    if not self.download_cancellations.get(progress_key, False):
+                        if success:
+                            self.download_progress[progress_key].update({
+                                'status': 'completed',
+                                'percentage': 100
+                            })
+                        else:
+                            self.download_progress[progress_key].update({
+                                'status': 'error',
+                                'error': 'Download failed'
+                            })
+                    
+                except Exception as e:
+                    self.download_progress[progress_key].update({
+                        'status': 'error',
+                        'error': str(e)
+                    })
+            
+            # Start download in background thread
+            thread = threading.Thread(target=download_thread, daemon=True)
+            thread.start()
+            
+            return json.dumps({'success': True, 'download_id': download_id})
+            
+        except Exception as e:
+            self.logger.error(f"API: Error starting direct download: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def show_save_file_dialog(self, filename: str) -> str:
+        """Show REAL native OS save file dialog."""
+        try:
+            import os
+            import platform
+            from pathlib import Path
+            
+            # Get file extension for filter
+            file_ext = Path(filename).suffix.lower()
+            
+            # Get default directory
+            default_dir = os.path.expanduser('~/Downloads')
+            if not os.path.exists(default_dir):
+                default_dir = os.path.expanduser('~')
+            
+            default_path = os.path.join(default_dir, filename)
+            
+            system = platform.system().lower()
+            
+            if system == 'windows':
+                # Use Windows native dialog
+                import tkinter as tk
+                from tkinter import filedialog
+                
+                # Create hidden root window
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes('-topmost', True)
+                
+                # Set file type filter
+                if file_ext:
+                    filetypes = [
+                        (f'{file_ext.upper()[1:]} files', f'*{file_ext}'),
+                        ('All files', '*.*')
+                    ]
+                else:
+                    filetypes = [('All files', '*.*')]
+                
+                # Show Windows save dialog
+                result = filedialog.asksaveasfilename(
+                    title=f'Save {filename}',
+                    initialfile=filename,
+                    initialdir=default_dir,
+                    filetypes=filetypes,
+                    defaultextension=file_ext if file_ext else ''
+                )
+                
+                root.destroy()
+                
+                if result:
+                    return json.dumps({'success': True, 'path': result})
+                else:
+                    return json.dumps({'success': False, 'cancelled': True})
+                    
+            elif system == 'linux':
+                # Use Linux native dialog (zenity, kdialog, or tkinter)
+                try:
+                    # Try zenity first (GNOME)
+                    import subprocess
+                    
+                    cmd = [
+                        'zenity', '--file-selection', '--save',
+                        '--title', f'Save {filename}',
+                        '--filename', default_path
+                    ]
+                    
+                    if file_ext:
+                        cmd.extend(['--file-filter', f'{file_ext.upper()[1:]} files | *{file_ext}'])
+                        cmd.extend(['--file-filter', 'All files | *'])
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                    
+                    if result.returncode == 0 and result.stdout.strip():
+                        return json.dumps({'success': True, 'path': result.stdout.strip()})
+                    elif result.returncode == 1:  # User cancelled
+                        return json.dumps({'success': False, 'cancelled': True})
+                    else:
+                        raise Exception("Zenity failed")
+                        
+                except:
+                    try:
+                        # Try kdialog (KDE)
+                        cmd = [
+                            'kdialog', '--getsavefilename', default_path,
+                            '--title', f'Save {filename}'
+                        ]
+                        
+                        if file_ext:
+                            cmd.append(f'*{file_ext}|{file_ext.upper()[1:]} files')
+                        
+                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                        
+                        if result.returncode == 0 and result.stdout.strip():
+                            return json.dumps({'success': True, 'path': result.stdout.strip()})
+                        elif result.returncode == 1:  # User cancelled
+                            return json.dumps({'success': False, 'cancelled': True})
+                        else:
+                            raise Exception("KDialog failed")
+                            
+                    except:
+                        # Fallback to tkinter on Linux
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes('-topmost', True)
+                        
+                        if file_ext:
+                            filetypes = [
+                                (f'{file_ext.upper()[1:]} files', f'*{file_ext}'),
+                                ('All files', '*.*')
+                            ]
+                        else:
+                            filetypes = [('All files', '*.*')]
+                        
+                        result = filedialog.asksaveasfilename(
+                            title=f'Save {filename}',
+                            initialfile=filename,
+                            initialdir=default_dir,
+                            filetypes=filetypes,
+                            defaultextension=file_ext if file_ext else ''
+                        )
+                        
+                        root.destroy()
+                        
+                        if result:
+                            return json.dumps({'success': True, 'path': result})
+                        else:
+                            return json.dumps({'success': False, 'cancelled': True})
+                            
+            elif system == 'darwin':
+                # Use macOS native dialog
+                import subprocess
+                
+                cmd = [
+                    'osascript', '-e',
+                    f'''
+                    tell application "System Events"
+                        set theFile to choose file name with prompt "Save {filename}" default name "{filename}" default location (path to downloads folder)
+                        return POSIX path of theFile
+                    end tell
+                    '''
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    return json.dumps({'success': True, 'path': result.stdout.strip()})
+                else:
+                    return json.dumps({'success': False, 'cancelled': True})
+            
+            else:
+                raise Exception(f"Unsupported platform: {system}")
+                
+        except Exception as e:
+            self.logger.error(f"API: Error showing native save dialog: {e}")
+            return json.dumps({
+                'success': False, 
+                'error': str(e),
+                'fallback_needed': True
+            })
+    
+    def start_download_with_progress(self, session_id: str, remote_path: str, download_id: str) -> str:
+        """Start a download with progress tracking."""
+        try:
+            import threading
+            
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            # Initialize progress tracking
+            progress_key = f"{session_id}:{download_id}"
+            self.download_progress[progress_key] = {
+                'downloaded': 0,
+                'total': 0,
+                'percentage': 0,
+                'status': 'starting',
+                'error': None
+            }
+            self.download_cancellations[progress_key] = False
+            
+            def progress_callback(downloaded, total, percentage):
+                # Check for cancellation FIRST before updating progress
+                if self.download_cancellations.get(progress_key, False):
+                    self.download_progress[progress_key]['status'] = 'cancelled'
+                    raise Exception("Download cancelled by user")
+                
+                self.download_progress[progress_key] = {
+                    'downloaded': downloaded,
+                    'total': total,
+                    'percentage': percentage,
+                    'status': 'downloading',
+                    'error': None
+                }
+            
+            def download_thread():
+                try:
+                    self.download_progress[progress_key]['status'] = 'downloading'
+                    content = session.download_file_content(remote_path, progress_callback)
+                    
+                    if not self.download_cancellations.get(progress_key, False):
+                        # Encode as base64 for transfer
+                        import base64
+                        file_content = base64.b64encode(content).decode('utf-8')
+                        
+                        self.download_progress[progress_key].update({
+                            'status': 'completed',
+                            'content': file_content,
+                            'size': len(content)
+                        })
+                    
+                except Exception as e:
+                    self.download_progress[progress_key].update({
+                        'status': 'error',
+                        'error': str(e)
+                    })
+            
+            # Start download in background thread
+            thread = threading.Thread(target=download_thread, daemon=True)
+            thread.start()
+            
+            return json.dumps({'success': True, 'download_id': download_id})
+            
+        except Exception as e:
+            self.logger.error(f"API: Error starting download: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def cancel_download(self, session_id: str, download_id: str) -> str:
+        """Cancel an ongoing download."""
+        try:
+            progress_key = f"{session_id}:{download_id}"
+            self.download_cancellations[progress_key] = True
+            
+            if progress_key in self.download_progress:
+                self.download_progress[progress_key]['status'] = 'cancelled'
+            
+            return json.dumps({'success': True})
+        except Exception as e:
+            self.logger.error(f"API: Error cancelling download: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def get_download_progress(self, session_id: str, download_id: str) -> str:
+        """Get download progress for a file."""
+        try:
+            progress_key = f"{session_id}:{download_id}"
+            progress = self.download_progress.get(progress_key, {})
+            return json.dumps(progress)
+        except Exception as e:
+            self.logger.error(f"API: Error getting download progress: {e}")
+            return json.dumps({})
+    
+    def get_file_info(self, session_id: str, remote_path: str) -> str:
+        """Get file information via SFTP."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            file_info = session.get_file_info(remote_path)
+            return json.dumps({'success': True, 'info': file_info})
+        except Exception as e:
+            self.logger.error(f"API: Error getting file info for {remote_path}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def get_encryption_status(self) -> str:
+        """Get encryption status for frontend warning."""
+        try:
+            status = self.connection_store.get_encryption_status()
+            return json.dumps(status)
+        except Exception as e:
+            self.logger.error(f"API: Error getting encryption status: {e}")
+            return json.dumps({'available': False, 'warning_needed': True})
+    
+    def mark_encryption_warning_shown(self) -> str:
+        """Mark encryption warning as shown."""
+        try:
+            self.connection_store.mark_encryption_warning_shown()
+            return json.dumps({'success': True})
+        except Exception as e:
+            self.logger.error(f"API: Error marking encryption warning: {e}")
+            return json.dumps({'success': False})
+
+    def _handle_host_key_verification(self, hostname: str, key_type: str, fingerprint: str) -> bool:
+        """Handle host key verification internally."""
+        # Store verification details
+        verification_id = f"{hostname}_{key_type}"
+        self.pending_verifications[verification_id] = {
+            'hostname': hostname,
+            'key_type': key_type,
+            'fingerprint': fingerprint,
+            'verified': False
+        }
+        
+        # Wait for user verification (with timeout)
+        import time
+        timeout = 60  # 60 seconds timeout
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            if verification_id in self.pending_verifications:
+                if self.pending_verifications[verification_id].get('verified'):
+                    del self.pending_verifications[verification_id]
+                    return True
+                elif self.pending_verifications[verification_id].get('rejected'):
+                    del self.pending_verifications[verification_id]
+                    return False
+            time.sleep(0.1)
+        
+        # Timeout - reject
+        if verification_id in self.pending_verifications:
+            del self.pending_verifications[verification_id]
+        return False
+    
+    def get_pending_host_verification(self, session_id: str) -> str:
+        """Check if there's a pending host key verification."""
+        try:
+            # Find any pending verification
+            for verification_id, details in self.pending_verifications.items():
+                if not details.get('verified') and not details.get('rejected'):
+                    return json.dumps({
+                        'pending': True,
+                        'hostname': details['hostname'],
+                        'key_type': details['key_type'],
+                        'fingerprint': details['fingerprint'],
+                        'verification_id': verification_id
+                    })
+            
+            return json.dumps({'pending': False})
+        except Exception as e:
+            self.logger.error(f"API: Error checking host verification: {e}")
+            return json.dumps({'pending': False})
+    
+    def verify_host_key(self, verification_id: str, accepted: bool) -> str:
+        """Verify or reject a host key."""
+        try:
+            if verification_id in self.pending_verifications:
+                if accepted:
+                    self.pending_verifications[verification_id]['verified'] = True
+                else:
+                    self.pending_verifications[verification_id]['rejected'] = True
+                
+                return json.dumps({'success': True})
+            else:
+                return json.dumps({'success': False, 'error': 'Verification not found'})
+        except Exception as e:
+            self.logger.error(f"API: Error verifying host key: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    # System Monitor Methods
+    def get_system_info(self, session_id: str) -> str:
+        """Get basic system information."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            info = session.get_system_info()
+            return json.dumps({'success': True, 'info': info})
+        except Exception as e:
+            self.logger.error(f"API: Error getting system info for session {session_id}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def get_system_stats(self, session_id: str) -> str:
+        """Get real-time system statistics."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            stats = session.get_system_stats()
+            return json.dumps({'success': True, 'stats': stats})
+        except Exception as e:
+            self.logger.error(f"API: Error getting system stats for session {session_id}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def get_process_list(self, session_id: str) -> str:
+        """Get running processes."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            processes = session.get_process_list()
+            return json.dumps({'success': True, 'processes': processes})
+        except Exception as e:
+            self.logger.error(f"API: Error getting process list for session {session_id}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def get_disk_usage(self, session_id: str) -> str:
+        """Get disk usage information."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            disk_info = session.get_disk_usage()
+            return json.dumps({'success': True, 'disk_usage': disk_info})
+        except Exception as e:
+            self.logger.error(f"API: Error getting disk usage for session {session_id}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def get_network_info(self, session_id: str) -> str:
+        """Get network interface information."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            network_info = session.get_network_info()
+            return json.dumps({'success': True, 'network_info': network_info})
+        except Exception as e:
+            self.logger.error(f"API: Error getting network info for session {session_id}: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    # Port Forwarding Methods
+    def create_local_port_forward(self, session_id: str, local_port: int, remote_host: str, remote_port: int) -> str:
+        """Create a local port forward."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            forward_id = session.create_local_port_forward(local_port, remote_host, remote_port)
+            return json.dumps({'success': True, 'forward_id': forward_id})
+        except Exception as e:
+            self.logger.error(f"API: Error creating local port forward: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def create_remote_port_forward(self, session_id: str, remote_port: int, local_host: str, local_port: int) -> str:
+        """Create a remote port forward."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            forward_id = session.create_remote_port_forward(remote_port, local_host, local_port)
+            return json.dumps({'success': True, 'forward_id': forward_id})
+        except Exception as e:
+            self.logger.error(f"API: Error creating remote port forward: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def create_dynamic_port_forward(self, session_id: str, local_port: int) -> str:
+        """Create a dynamic port forward (SOCKS proxy)."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            forward_id = session.create_dynamic_port_forward(local_port)
+            return json.dumps({'success': True, 'forward_id': forward_id})
+        except Exception as e:
+            self.logger.error(f"API: Error creating dynamic port forward: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def stop_port_forward(self, session_id: str, forward_id: str) -> str:
+        """Stop a port forward."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            success = session.stop_port_forward(forward_id)
+            return json.dumps({'success': success})
+        except Exception as e:
+            self.logger.error(f"API: Error stopping port forward: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+    
+    def list_port_forwards(self, session_id: str) -> str:
+        """List all port forwards for a session."""
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+            
+            forwards = session.list_port_forwards()
+            return json.dumps({'success': True, 'forwards': forwards})
+        except Exception as e:
+            self.logger.error(f"API: Error listing port forwards: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+
     def cleanup(self):
         """Cleanup resources on shutdown."""
         self.logger.info("API: Cleaning up resources")
+        
+        # Stop file watcher
+        if hasattr(self, 'file_watcher'):
+            self.file_watcher.stop()
+        
+        # Clean up any remaining temp files
+        if hasattr(self, 'edit_mappings'):
+            import os
+            for temp_path in list(self.edit_mappings.keys()):
+                try:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                except Exception as e:
+                    self.logger.error(f"Error cleaning up temp file {temp_path}: {e}")
+        
         self.session_manager.disconnect_all()

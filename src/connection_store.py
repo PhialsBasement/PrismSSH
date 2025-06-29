@@ -32,6 +32,7 @@ class ConnectionStore:
         self.config = config
         self.logger = Logger.get_logger(__name__)
         self.cipher = self._get_cipher() if ENCRYPTION_AVAILABLE else None
+        self.encryption_warning_shown = False
         
         if not ENCRYPTION_AVAILABLE:
             self.logger.warning(
@@ -40,6 +41,17 @@ class ConnectionStore:
             )
         
         self._ensure_config_dir()
+    
+    def get_encryption_status(self) -> dict:
+        """Get encryption status for frontend warning."""
+        return {
+            'available': ENCRYPTION_AVAILABLE,
+            'warning_needed': not ENCRYPTION_AVAILABLE and not self.encryption_warning_shown
+        }
+    
+    def mark_encryption_warning_shown(self):
+        """Mark that the encryption warning has been shown to the user."""
+        self.encryption_warning_shown = True
     
     def _ensure_config_dir(self) -> bool:
         """Create config directory if it doesn't exist."""
@@ -60,23 +72,40 @@ class ConnectionStore:
             return None
             
         try:
-            if self.config.key_file.exists():
+            key_info_file = self.config.config_dir / ".key_info"
+            
+            if self.config.key_file.exists() and key_info_file.exists():
+                # Load existing key and salt
                 with open(self.config.key_file, 'rb') as f:
                     key = f.read()
+                with open(key_info_file, 'rb') as f:
+                    stored_salt = f.read()
             else:
-                # Generate a new key
-                salt = os.urandom(16)
+                # Generate a new key with random salt and passphrase
+                salt = os.urandom(32)  # Use 32-byte salt
+                
+                # Generate a random passphrase for this installation
+                random_passphrase = base64.urlsafe_b64encode(os.urandom(32)).decode('utf-8')
+                
                 kdf = PBKDF2HMAC(
                     algorithm=hashes.SHA256(),
                     length=32,
                     salt=salt,
                     iterations=self.config.encryption_key_iterations,
                 )
-                key = base64.urlsafe_b64encode(kdf.derive(b"prismssh-local-key"))
+                key_material = kdf.derive(random_passphrase.encode())
+                key = base64.urlsafe_b64encode(key_material)
                 
+                # Save key and salt info
                 with open(self.config.key_file, 'wb') as f:
-                    os.chmod(self.config.key_file, self.config.key_file_permissions)
                     f.write(key)
+                os.chmod(self.config.key_file, self.config.key_file_permissions)
+                
+                with open(key_info_file, 'wb') as f:
+                    f.write(salt)
+                os.chmod(key_info_file, self.config.key_file_permissions)
+                
+                self.logger.info("Generated new encryption key with random passphrase")
             
             return Fernet(key)
         except Exception as e:
