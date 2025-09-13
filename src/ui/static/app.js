@@ -1739,6 +1739,339 @@ function showHostKeyVerificationModal(details) {
     });
 }
 
+// Global clipboard functionality for terminals
+let terminalClipboard = '';
+
+// Copy/Paste functionality for terminals
+function setupTerminalClipboard(terminal) {
+    // Handle copy/paste keyboard shortcuts
+    terminal.attachCustomKeyEventHandler((event) => {
+        // Check for Ctrl+Shift+C (copy)
+        if (event.ctrlKey && event.shiftKey && event.key === 'C') {
+            if (event.type === 'keydown') {
+                copyTerminalSelection(terminal);
+            }
+            return false; // Prevent default behavior
+        }
+        
+        // Check for Ctrl+Shift+V (paste)
+        if (event.ctrlKey && event.shiftKey && event.key === 'V') {
+            if (event.type === 'keydown') {
+                pasteToTerminal(terminal);
+            }
+            return false; // Prevent default behavior
+        }
+        
+        return true; // Allow other key events to proceed normally
+    });
+    
+    // Add right-click context menu for copy/paste
+    terminal.element.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showTerminalContextMenu(e, terminal);
+    });
+}
+
+function copyTerminalSelection(terminal) {
+    try {
+        console.log('Copy function called');
+        const selection = terminal.getSelection();
+        console.log('Selection:', JSON.stringify(selection));
+        console.log('Selection length:', selection ? selection.length : 'null');
+        console.log('Has selection:', terminal.hasSelection());
+        if (selection && selection.trim()) {
+            // Store in our internal clipboard
+            terminalClipboard = selection;
+            
+            // Try to use system clipboard if available
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(selection).then(() => {
+                    console.log('Text copied to system clipboard');
+                    showCopyNotification('Copied to clipboard');
+                }).catch((err) => {
+                    console.warn('Failed to copy to system clipboard:', err);
+                    showCopyNotification('Copied to internal clipboard');
+                });
+            } else {
+                // Fallback: try using the old execCommand method
+                try {
+                    const textArea = document.createElement('textarea');
+                    textArea.value = selection;
+                    textArea.style.position = 'fixed';
+                    textArea.style.opacity = '0';
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    
+                    const successful = document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    
+                    if (successful) {
+                        console.log('Text copied using execCommand');
+                        showCopyNotification('Copied to clipboard');
+                    } else {
+                        throw new Error('execCommand failed');
+                    }
+                } catch (fallbackErr) {
+                    console.warn('All clipboard methods failed:', fallbackErr);
+                    showCopyNotification('Copied to internal clipboard');
+                }
+            }
+        } else {
+            showCopyNotification('No text selected', 'warning');
+        }
+    } catch (error) {
+        console.error('Error copying terminal selection:', error);
+        showCopyNotification('Copy failed', 'error');
+    }
+}
+
+async function pasteToTerminal(terminal) {
+    try {
+        let textToPaste = '';
+        
+        // Try to get text from system clipboard first
+        if (navigator.clipboard && window.isSecureContext) {
+            try {
+                textToPaste = await navigator.clipboard.readText();
+                console.log('Text retrieved from system clipboard');
+            } catch (err) {
+                console.warn('Failed to read from system clipboard:', err);
+                textToPaste = terminalClipboard;
+                console.log('Using internal clipboard');
+            }
+        } else {
+            // Fallback to internal clipboard
+            textToPaste = terminalClipboard;
+            console.log('Using internal clipboard (no system clipboard access)');
+        }
+        
+        if (textToPaste) {
+            // Send the text to the terminal (which will forward to SSH session)
+            terminal.paste(textToPaste);
+            showCopyNotification('Text pasted');
+        } else {
+            showCopyNotification('No text to paste', 'warning');
+        }
+    } catch (error) {
+        console.error('Error pasting to terminal:', error);
+        showCopyNotification('Paste failed', 'error');
+    }
+}
+
+function showTerminalContextMenu(event, terminal) {
+    // Remove any existing context menu
+    const existingMenu = document.getElementById('terminalContextMenu');
+    if (existingMenu) {
+        existingMenu.remove();
+    }
+    
+    const hasSelection = terminal.hasSelection();
+    
+    // Create context menu
+    const contextMenu = document.createElement('div');
+    contextMenu.id = 'terminalContextMenu';
+    contextMenu.style.cssText = `
+        position: fixed;
+        background: rgba(30, 30, 30, 0.95);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        padding: 8px 0;
+        min-width: 150px;
+        z-index: 10000;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        font-family: 'Inter', sans-serif;
+        font-size: 14px;
+    `;
+    
+    // Copy option
+    const copyOption = document.createElement('div');
+    copyOption.style.cssText = `
+        padding: 8px 16px;
+        color: ${hasSelection ? '#ffffff' : '#666666'};
+        cursor: ${hasSelection ? 'pointer' : 'not-allowed'};
+        transition: background-color 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    `;
+    copyOption.innerHTML = `
+        <span style="font-family: monospace;">⌘</span>
+        Copy${hasSelection ? '' : ' (no selection)'}
+        <span style="margin-left: auto; font-size: 12px; color: #888;">Ctrl+Shift+C</span>
+    `;
+    
+    if (hasSelection) {
+        copyOption.onmouseover = () => copyOption.style.background = 'rgba(0, 212, 255, 0.2)';
+        copyOption.onmouseout = () => copyOption.style.background = 'transparent';
+        copyOption.onclick = () => {
+            copyTerminalSelection(terminal);
+            contextMenu.remove();
+        };
+    }
+    
+    // Paste option
+    const pasteOption = document.createElement('div');
+    pasteOption.style.cssText = `
+        padding: 8px 16px;
+        color: #ffffff;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    `;
+    pasteOption.innerHTML = `
+        <span style="font-family: monospace;">📋</span>
+        Paste
+        <span style="margin-left: auto; font-size: 12px; color: #888;">Ctrl+Shift+V</span>
+    `;
+    pasteOption.onmouseover = () => pasteOption.style.background = 'rgba(0, 212, 255, 0.2)';
+    pasteOption.onmouseout = () => pasteOption.style.background = 'transparent';
+    pasteOption.onclick = () => {
+        pasteToTerminal(terminal);
+        contextMenu.remove();
+    };
+    
+    // Add separator
+    const separator = document.createElement('div');
+    separator.style.cssText = `
+        height: 1px;
+        background: rgba(255, 255, 255, 0.1);
+        margin: 4px 0;
+    `;
+    
+    // Select All option
+    const selectAllOption = document.createElement('div');
+    selectAllOption.style.cssText = `
+        padding: 8px 16px;
+        color: #ffffff;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    `;
+    selectAllOption.innerHTML = `
+        <span style="font-family: monospace;">◉</span>
+        Select All
+        <span style="margin-left: auto; font-size: 12px; color: #888;">Ctrl+A</span>
+    `;
+    selectAllOption.onmouseover = () => selectAllOption.style.background = 'rgba(0, 212, 255, 0.2)';
+    selectAllOption.onmouseout = () => selectAllOption.style.background = 'transparent';
+    selectAllOption.onclick = () => {
+        terminal.selectAll();
+        contextMenu.remove();
+    };
+    
+    // Clear option
+    const clearOption = document.createElement('div');
+    clearOption.style.cssText = `
+        padding: 8px 16px;
+        color: #ffffff;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    `;
+    clearOption.innerHTML = `
+        <span style="font-family: monospace;">🗑</span>
+        Clear Terminal
+        <span style="margin-left: auto; font-size: 12px; color: #888;">Ctrl+L</span>
+    `;
+    clearOption.onmouseover = () => clearOption.style.background = 'rgba(255, 68, 68, 0.2)';
+    clearOption.onmouseout = () => clearOption.style.background = 'transparent';
+    clearOption.onclick = () => {
+        terminal.clear();
+        contextMenu.remove();
+    };
+    
+    // Assemble menu
+    contextMenu.appendChild(copyOption);
+    contextMenu.appendChild(pasteOption);
+    contextMenu.appendChild(separator);
+    contextMenu.appendChild(selectAllOption);
+    contextMenu.appendChild(clearOption);
+    
+    // Position menu
+    contextMenu.style.left = event.pageX + 'px';
+    contextMenu.style.top = event.pageY + 'px';
+    
+    // Add to page
+    document.body.appendChild(contextMenu);
+    
+    // Hide menu when clicking elsewhere
+    setTimeout(() => {
+        document.addEventListener('click', () => {
+            if (contextMenu.parentNode) {
+                contextMenu.remove();
+            }
+        }, { once: true });
+    }, 0);
+    
+    // Prevent the default context menu
+    event.preventDefault();
+    event.stopPropagation();
+}
+
+function showCopyNotification(message, type = 'success') {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 70px;
+        right: 20px;
+        background: ${type === 'error' ? 'rgba(255, 68, 68, 0.9)' : 
+                    type === 'warning' ? 'rgba(255, 165, 0, 0.9)' : 
+                    'rgba(0, 255, 136, 0.9)'};
+        color: white;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 12px;
+        z-index: 10001;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        backdrop-filter: blur(10px);
+        font-family: 'Inter', sans-serif;
+        animation: slideInFromRight 0.3s ease;
+    `;
+    
+    const icon = type === 'error' ? '❌' : type === 'warning' ? '⚠️' : '✓';
+    notification.textContent = `${icon} ${message}`;
+    
+    // Add animation keyframes if not already added
+    if (!document.getElementById('copyNotificationStyles')) {
+        const style = document.createElement('style');
+        style.id = 'copyNotificationStyles';
+        style.textContent = `
+            @keyframes slideInFromRight {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    document.body.appendChild(notification);
+    
+    // Remove after 2 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.style.animation = 'slideInFromRight 0.3s ease reverse';
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }
+    }, 2000);
+}
+
 // Wait for page to load
 window.addEventListener('DOMContentLoaded', () => {
     console.log('Page loaded, checking Terminal availability...');
@@ -1893,6 +2226,9 @@ function createTerminalForSession(sessionId, hostname) {
         
         // Open terminal
         terminal.open(terminalElement);
+        
+        // Set up copy/paste functionality
+        setupTerminalClipboard(terminal);
         
         // Get container dimensions and calculate rows/cols
         const calculateTerminalSize = () => {
