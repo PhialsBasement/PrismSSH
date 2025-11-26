@@ -139,12 +139,15 @@ def main():
             min_size=(config.window_min_width, config.window_min_height)
         )
         logger.info("WebView window created")
-        
+
+        # Give API access to window for JS calls
+        api.set_window(window)
+
         # Register cleanup on window close
         def on_window_closed():
             logger.info("Window closed, cleaning up...")
             api.cleanup()
-        
+
         # Start the GUI
         logger.info("Starting WebView...")
         webview.start(debug=False)

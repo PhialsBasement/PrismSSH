@@ -44,8 +44,15 @@ class PrismSSHAPI:
             from file_watcher import FileWatcher
             self.file_watcher = FileWatcher(self._sync_file_callback)
             self.file_watcher.start()
-        
+
+        # Window reference for JS calls (set by main.py)
+        self.window = None
+
         self.logger.info("PrismSSH API initialized")
+
+    def set_window(self, window):
+        """Set the webview window reference for JS calls."""
+        self.window = window
     
     def create_session(self) -> str:
         """Create a new SSH session."""
@@ -346,11 +353,14 @@ class PrismSSHAPI:
                 
                 # Add file to watcher
                 self.file_watcher.add_file(temp_path)
-                
+
                 self.logger.info(f"Created temp file for editing: {temp_path}")
-                
+
+                # Open file in default editor
+                self._open_file_in_editor(temp_path)
+
                 return json.dumps({
-                    'success': True, 
+                    'success': True,
                     'temp_path': temp_path,
                     'file_name': file_name
                 })
@@ -367,53 +377,143 @@ class PrismSSHAPI:
             self.logger.error(f"API: Error creating temp file for {remote_path}: {e}")
             return json.dumps({'success': False, 'error': str(e)})
     
+    def _open_file_in_editor(self, file_path: str):
+        """Open a file in the system's default editor and track when it closes."""
+        import subprocess
+        import platform
+        import threading
+
+        system = platform.system().lower()
+
+        def wait_for_editor_and_cleanup():
+            """Wait for editor to close, then clean up."""
+            try:
+                if system == 'windows':
+                    # Use 'start /wait' to wait for the editor to close
+                    subprocess.run(['cmd', '/c', 'start', '/wait', '', file_path], shell=False)
+                elif system == 'darwin':
+                    # Use 'open -W' to wait for the application to close
+                    subprocess.run(['open', '-W', file_path])
+                else:
+                    # Use xdg-open, but it doesn't wait, so we can't track easily
+                    subprocess.run(['xdg-open', file_path])
+
+                self.logger.info(f"Editor closed for: {file_path}")
+
+                # Clean up after editor closes
+                self._cleanup_edit_session(file_path)
+
+            except Exception as e:
+                self.logger.error(f"Error waiting for editor: {e}")
+
+        try:
+            # Run in background thread so we don't block
+            thread = threading.Thread(target=wait_for_editor_and_cleanup, daemon=True)
+            thread.start()
+            self.logger.info(f"Opened file in editor: {file_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to open file in editor: {e}")
+
+    def _cleanup_edit_session(self, temp_path: str):
+        """Clean up after editing session ends."""
+        try:
+            import os
+
+            # Final sync before cleanup
+            self.sync_edited_file(temp_path)
+
+            # Remove from file watcher
+            self.file_watcher.remove_file(temp_path)
+
+            # Remove from mappings
+            if hasattr(self, 'edit_mappings') and temp_path in self.edit_mappings:
+                del self.edit_mappings[temp_path]
+
+            # Delete temp file
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+                self.logger.info(f"Cleaned up edit session: {temp_path}")
+
+        except Exception as e:
+            self.logger.error(f"Error cleaning up edit session: {e}")
+
     def sync_edited_file(self, temp_path: str) -> str:
         """Sync edited temp file back to server."""
         try:
+            self.logger.info(f"sync_edited_file called for: {temp_path}")
+
             if not hasattr(self, 'edit_mappings') or temp_path not in self.edit_mappings:
+                self.logger.warning(f"No mapping found for: {temp_path}")
                 return json.dumps({'success': False, 'error': 'File mapping not found'})
-            
+
             mapping = self.edit_mappings[temp_path]
+            self.logger.info(f"Found mapping: session={mapping['session_id']}, remote={mapping['remote_path']}")
+
             session = self.session_manager.get_session(mapping['session_id'])
-            
+
             if not session:
+                self.logger.warning(f"Session not found: {mapping['session_id']}")
                 return json.dumps({'success': False, 'error': 'Session not found'})
-            
+
             import os
-            
+
             # Check if file was modified
             current_mtime = os.path.getmtime(temp_path)
+            self.logger.info(f"mtime check: current={current_mtime}, original={mapping['original_mtime']}")
+
             if current_mtime <= mapping['original_mtime']:
+                self.logger.info("No changes detected (mtime not newer)")
                 return json.dumps({'success': True, 'message': 'No changes detected'})
-            
+
             # Read updated content
             with open(temp_path, 'rb') as f:
                 file_bytes = f.read()
-            
+
+            self.logger.info(f"Read {len(file_bytes)} bytes from temp file, uploading to {mapping['remote_path']}")
+
             # Upload back to server
             success = session.upload_file_content(file_bytes, mapping['remote_path'])
-            
+
             if success:
                 # Update the modification time
                 mapping['original_mtime'] = current_mtime
-                self.logger.info(f"Synced edited file: {mapping['remote_path']}")
+                self.logger.info(f"Successfully synced edited file: {mapping['remote_path']}")
+
+                # Show notification in UI
+                self._show_sync_notification(mapping['remote_path'])
+
                 return json.dumps({'success': True, 'message': 'File synced to server'})
             else:
+                self.logger.error(f"Upload failed for: {mapping['remote_path']}")
                 return json.dumps({'success': False, 'error': 'Failed to upload to server'})
-                
+
         except Exception as e:
             self.logger.error(f"API: Error syncing edited file {temp_path}: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return json.dumps({'success': False, 'error': str(e)})
     
+    def _show_sync_notification(self, remote_path: str):
+        """Show sync notification in the UI."""
+        try:
+            if self.window:
+                from pathlib import Path
+                file_name = Path(remote_path).name
+                self.window.evaluate_js(f'showSyncNotification("{file_name}")')
+        except Exception as e:
+            self.logger.error(f"Error showing sync notification: {e}")
+
     def _sync_file_callback(self, temp_path: str):
         """Callback for file watcher when a file is modified."""
         try:
             self.logger.info(f"File watcher detected change in: {temp_path}")
             result = self.sync_edited_file(temp_path)
             response = json.loads(result)
-            
-            if response.get('success'):
+
+            if response.get('success') and response.get('message') == 'File synced to server':
                 self.logger.info(f"Auto-synced file: {temp_path}")
+            elif response.get('success'):
+                pass  # No changes detected, don't log
             else:
                 self.logger.warning(f"Failed to auto-sync file {temp_path}: {response.get('error')}")
                 
@@ -1038,6 +1138,75 @@ class PrismSSHAPI:
             return json.dumps({'success': True, 'forwards': forwards})
         except Exception as e:
             self.logger.error(f"API: Error listing port forwards: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+
+    def clipboard_copy(self, text: str) -> str:
+        """Copy text to system clipboard."""
+        try:
+            import subprocess
+            import platform
+
+            system = platform.system().lower()
+
+            if system == 'windows':
+                # Use clip.exe on Windows
+                process = subprocess.Popen(['clip'], stdin=subprocess.PIPE)
+                process.communicate(text.encode('utf-16le'))
+            elif system == 'darwin':
+                # Use pbcopy on macOS
+                process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
+                process.communicate(text.encode('utf-8'))
+            else:
+                # Try xclip or xsel on Linux
+                try:
+                    process = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
+                    process.communicate(text.encode('utf-8'))
+                except FileNotFoundError:
+                    process = subprocess.Popen(['xsel', '--clipboard', '--input'], stdin=subprocess.PIPE)
+                    process.communicate(text.encode('utf-8'))
+
+            return json.dumps({'success': True})
+        except Exception as e:
+            self.logger.error(f"API: Error copying to clipboard: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+
+    def clipboard_paste(self) -> str:
+        """Get text from system clipboard."""
+        try:
+            import subprocess
+            import platform
+
+            system = platform.system().lower()
+
+            if system == 'windows':
+                # Use PowerShell on Windows
+                result = subprocess.run(
+                    ['powershell', '-command', 'Get-Clipboard'],
+                    capture_output=True, text=True
+                )
+                text = result.stdout.rstrip('\r\n')
+            elif system == 'darwin':
+                # Use pbpaste on macOS
+                result = subprocess.run(['pbpaste'], capture_output=True, text=True)
+                text = result.stdout
+            else:
+                # Try xclip or xsel on Linux
+                try:
+                    result = subprocess.run(
+                        ['xclip', '-selection', 'clipboard', '-o'],
+                        capture_output=True, text=True
+                    )
+                    text = result.stdout
+                except FileNotFoundError:
+                    result = subprocess.run(
+                        ['xsel', '--clipboard', '--output'],
+                        capture_output=True, text=True
+                    )
+                    text = result.stdout
+
+            return json.dumps({'success': True, 'text': text})
+        except Exception as e:
+            self.logger.error(f"API: Error reading from clipboard: {e}")
             return json.dumps({'success': False, 'error': str(e)})
 
     def cleanup(self):

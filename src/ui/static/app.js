@@ -1091,21 +1091,8 @@ async function editFile(fileName) {
         const displayName = response.file_name || fileName;
         
         // Show user that file is being opened
-        alert(`File "${displayName}" has been saved to temporary location and will be opened in your default editor.\n\nChanges will be automatically synced back to the server when you save the file.`);
-        
-        // Start file watcher for this temp file
-        if (!window.editedFiles) {
-            window.editedFiles = new Set();
-        }
-        
-        if (!window.editedFiles.has(tempPath)) {
-            window.editedFiles.add(tempPath);
-            
-            // Start monitoring this file for changes
-            startFileWatcher(tempPath, remotePath, displayName);
-        }
-        
-        console.log('File prepared for editing at:', tempPath);
+        // Python backend handles file watching and auto-sync
+        console.log('File opened for editing at:', tempPath);
         
     } catch (error) {
         console.error('Edit error:', error);
@@ -1113,62 +1100,8 @@ async function editFile(fileName) {
     }
 }
 
-// File watcher for edited files
-let fileWatchers = {};
-
-function startFileWatcher(tempPath, remotePath, displayName) {
-    // Check for file changes every 2 seconds
-    const watcherId = setInterval(async () => {
-        try {
-            const result = await window.pywebview.api.sync_edited_file(tempPath);
-            const response = JSON.parse(result);
-            
-            if (response.success && response.message && response.message.includes('synced')) {
-                console.log(`File "${displayName}" synced to server`);
-                
-                // Show brief notification (optional)
-                showSyncNotification(displayName);
-            }
-        } catch (error) {
-            console.error('Error checking file sync for', displayName, ':', error);
-            
-            // If file no longer exists or session is gone, stop watching
-            if (error.message.includes('not found') || error.message.includes('Session not found')) {
-                stopFileWatcher(tempPath);
-            }
-        }
-    }, 2000);
-    
-    fileWatchers[tempPath] = watcherId;
-    
-    // Auto-cleanup after 30 minutes
-    setTimeout(() => {
-        stopFileWatcher(tempPath);
-    }, 30 * 60 * 1000);
-}
-
-function stopFileWatcher(tempPath) {
-    if (fileWatchers[tempPath]) {
-        clearInterval(fileWatchers[tempPath]);
-        delete fileWatchers[tempPath];
-        
-        if (window.editedFiles) {
-            window.editedFiles.delete(tempPath);
-        }
-        
-        // Clean up temp file
-        try {
-            window.pywebview.api.cleanup_temp_file(tempPath);
-        } catch (error) {
-            console.error('Error cleaning up temp file:', error);
-        }
-        
-        console.log('Stopped watching file:', tempPath);
-    }
-}
-
+// Called from Python backend when a file is synced
 function showSyncNotification(fileName) {
-    // Create a temporary notification
     const notification = document.createElement('div');
     notification.style.cssText = `
         position: fixed;
@@ -1184,10 +1117,9 @@ function showSyncNotification(fileName) {
         backdrop-filter: blur(10px);
     `;
     notification.textContent = `✓ ${fileName} synced`;
-    
+
     document.body.appendChild(notification);
-    
-    // Remove after 3 seconds
+
     setTimeout(() => {
         if (notification.parentNode) {
             notification.parentNode.removeChild(notification);
@@ -1739,133 +1671,56 @@ function showHostKeyVerificationModal(details) {
     });
 }
 
-// Global clipboard functionality for terminals
-let terminalClipboard = '';
-
-// Copy/Paste functionality for terminals
-function setupTerminalClipboard(terminal) {
+// Copy/Paste functionality for terminals - uses Python backend for clipboard
+function setupTerminalClipboard(terminal, sessionId) {
     // Handle copy/paste keyboard shortcuts
     terminal.attachCustomKeyEventHandler((event) => {
         // Check for Ctrl+Shift+C (copy)
-        if (event.ctrlKey && event.shiftKey && event.key === 'C') {
-            if (event.type === 'keydown') {
-                copyTerminalSelection(terminal);
+        if (event.ctrlKey && event.shiftKey && (event.key === 'C' || event.key === 'c')) {
+            if (event.type === 'keydown' && !event.repeat) {
+                const selection = terminal.getSelection();
+                if (selection) {
+                    window.pywebview.api.clipboard_copy(selection);
+                }
             }
-            return false; // Prevent default behavior
+            return false;
         }
-        
+
         // Check for Ctrl+Shift+V (paste)
-        if (event.ctrlKey && event.shiftKey && event.key === 'V') {
-            if (event.type === 'keydown') {
-                pasteToTerminal(terminal);
+        if (event.ctrlKey && event.shiftKey && (event.key === 'V' || event.key === 'v')) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.type === 'keydown' && !event.repeat) {
+                window.pywebview.api.clipboard_paste().then(result => {
+                    const data = JSON.parse(result);
+                    if (data.success && data.text && currentSessionId === sessionId) {
+                        window.pywebview.api.send_input(sessionId, data.text);
+                    }
+                });
             }
-            return false; // Prevent default behavior
+            return false;
         }
-        
-        return true; // Allow other key events to proceed normally
+
+        return true;
     });
-    
+
     // Add right-click context menu for copy/paste
     terminal.element.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-        showTerminalContextMenu(e, terminal);
+        showTerminalContextMenu(e, terminal, sessionId);
     });
 }
 
-function copyTerminalSelection(terminal) {
-    try {
-        console.log('Copy function called');
-        const selection = terminal.getSelection();
-        console.log('Selection:', JSON.stringify(selection));
-        console.log('Selection length:', selection ? selection.length : 'null');
-        console.log('Has selection:', terminal.hasSelection());
-        if (selection && selection.trim()) {
-            // Store in our internal clipboard
-            terminalClipboard = selection;
-            
-            // Try to use system clipboard if available
-            if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(selection).then(() => {
-                    console.log('Text copied to system clipboard');
-                    showCopyNotification('Copied to clipboard');
-                }).catch((err) => {
-                    console.warn('Failed to copy to system clipboard:', err);
-                    showCopyNotification('Copied to internal clipboard');
-                });
-            } else {
-                // Fallback: try using the old execCommand method
-                try {
-                    const textArea = document.createElement('textarea');
-                    textArea.value = selection;
-                    textArea.style.position = 'fixed';
-                    textArea.style.opacity = '0';
-                    document.body.appendChild(textArea);
-                    textArea.select();
-                    
-                    const successful = document.execCommand('copy');
-                    document.body.removeChild(textArea);
-                    
-                    if (successful) {
-                        console.log('Text copied using execCommand');
-                        showCopyNotification('Copied to clipboard');
-                    } else {
-                        throw new Error('execCommand failed');
-                    }
-                } catch (fallbackErr) {
-                    console.warn('All clipboard methods failed:', fallbackErr);
-                    showCopyNotification('Copied to internal clipboard');
-                }
-            }
-        } else {
-            showCopyNotification('No text selected', 'warning');
-        }
-    } catch (error) {
-        console.error('Error copying terminal selection:', error);
-        showCopyNotification('Copy failed', 'error');
-    }
-}
-
-async function pasteToTerminal(terminal) {
-    try {
-        let textToPaste = '';
-        
-        // Try to get text from system clipboard first
-        if (navigator.clipboard && window.isSecureContext) {
-            try {
-                textToPaste = await navigator.clipboard.readText();
-                console.log('Text retrieved from system clipboard');
-            } catch (err) {
-                console.warn('Failed to read from system clipboard:', err);
-                textToPaste = terminalClipboard;
-                console.log('Using internal clipboard');
-            }
-        } else {
-            // Fallback to internal clipboard
-            textToPaste = terminalClipboard;
-            console.log('Using internal clipboard (no system clipboard access)');
-        }
-        
-        if (textToPaste) {
-            // Send the text to the terminal (which will forward to SSH session)
-            terminal.paste(textToPaste);
-            showCopyNotification('Text pasted');
-        } else {
-            showCopyNotification('No text to paste', 'warning');
-        }
-    } catch (error) {
-        console.error('Error pasting to terminal:', error);
-        showCopyNotification('Paste failed', 'error');
-    }
-}
-
-function showTerminalContextMenu(event, terminal) {
+function showTerminalContextMenu(event, terminal, sessionId) {
     // Remove any existing context menu
     const existingMenu = document.getElementById('terminalContextMenu');
     if (existingMenu) {
         existingMenu.remove();
     }
-    
+
+    // Capture selection NOW before any click events can clear it
     const hasSelection = terminal.hasSelection();
+    const capturedSelection = hasSelection ? terminal.getSelection() : '';
     
     // Create context menu
     const contextMenu = document.createElement('div');
@@ -1905,11 +1760,11 @@ function showTerminalContextMenu(event, terminal) {
         copyOption.onmouseover = () => copyOption.style.background = 'rgba(0, 212, 255, 0.2)';
         copyOption.onmouseout = () => copyOption.style.background = 'transparent';
         copyOption.onclick = () => {
-            copyTerminalSelection(terminal);
+            window.pywebview.api.clipboard_copy(capturedSelection);
             contextMenu.remove();
         };
     }
-    
+
     // Paste option
     const pasteOption = document.createElement('div');
     pasteOption.style.cssText = `
@@ -1929,7 +1784,12 @@ function showTerminalContextMenu(event, terminal) {
     pasteOption.onmouseover = () => pasteOption.style.background = 'rgba(0, 212, 255, 0.2)';
     pasteOption.onmouseout = () => pasteOption.style.background = 'transparent';
     pasteOption.onclick = () => {
-        pasteToTerminal(terminal);
+        window.pywebview.api.clipboard_paste().then(result => {
+            const data = JSON.parse(result);
+            if (data.success && data.text && currentSessionId === sessionId) {
+                window.pywebview.api.send_input(sessionId, data.text);
+            }
+        });
         contextMenu.remove();
     };
     
@@ -2226,9 +2086,9 @@ function createTerminalForSession(sessionId, hostname) {
         
         // Open terminal
         terminal.open(terminalElement);
-        
+
         // Set up copy/paste functionality
-        setupTerminalClipboard(terminal);
+        setupTerminalClipboard(terminal, sessionId);
         
         // Get container dimensions and calculate rows/cols
         const calculateTerminalSize = () => {
@@ -2577,6 +2437,121 @@ async function disconnectSession(sessionId) {
 
 // System Monitor Functions
 let systemMonitorInterval = null;
+let systemMonitorData = {
+    systemInfo: null,
+    systemStats: null,
+    processList: null,
+    diskUsage: null,
+    networkInfo: null
+};
+
+async function copySystemMonitorData() {
+    const data = systemMonitorData;
+    const timestamp = new Date().toISOString();
+
+    let output = `=== System Monitor Report ===\n`;
+    output += `Generated: ${timestamp}\n`;
+    output += `Session: ${currentSessionId || 'N/A'}\n\n`;
+
+    // System Information
+    output += `--- System Information ---\n`;
+    if (data.systemInfo) {
+        const fields = ['os_name', 'os_version', 'hostname', 'architecture', 'cpu', 'total_memory', 'uptime'];
+        fields.forEach(key => {
+            if (data.systemInfo[key]) {
+                const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                output += `${label}: ${data.systemInfo[key]}\n`;
+            }
+        });
+    } else {
+        output += `No data available\n`;
+    }
+
+    // Resource Usage
+    output += `\n--- Resource Usage ---\n`;
+    if (data.systemStats) {
+        if (data.systemStats.cpu_usage) output += `CPU Usage: ${data.systemStats.cpu_usage}\n`;
+        if (data.systemStats.memory_usage) {
+            output += `Memory Usage: ${data.systemStats.memory_usage}`;
+            if (data.systemStats.memory_used && data.systemStats.memory_total) {
+                output += ` (${data.systemStats.memory_used} / ${data.systemStats.memory_total})`;
+            }
+            output += `\n`;
+        }
+        if (data.systemStats.disk_usage) {
+            output += `Disk Usage: ${data.systemStats.disk_usage}`;
+            if (data.systemStats.disk_used && data.systemStats.disk_total) {
+                output += ` (${data.systemStats.disk_used} / ${data.systemStats.disk_total})`;
+            }
+            output += `\n`;
+        }
+    } else {
+        output += `No data available\n`;
+    }
+
+    // Disk Usage
+    output += `\n--- Disk Usage ---\n`;
+    if (data.diskUsage && data.diskUsage.length > 0) {
+        data.diskUsage.forEach(disk => {
+            output += `${disk.device || disk.mount || 'Unknown'}: ${disk.usage || '0%'} used`;
+            output += ` (${disk.used || '0'} / ${disk.total || '0'})`;
+            if (disk.mount) output += ` mounted at ${disk.mount}`;
+            output += `\n`;
+        });
+    } else {
+        output += `No data available\n`;
+    }
+
+    // Network Interfaces
+    output += `\n--- Network Interfaces ---\n`;
+    if (data.networkInfo && data.networkInfo.length > 0) {
+        data.networkInfo.forEach(iface => {
+            output += `${iface.name || 'Unknown'}:`;
+            if (iface.ip) output += ` IP=${iface.ip}`;
+            if (iface.netmask) output += ` Netmask=${iface.netmask}`;
+            if (iface.cidr) output += ` CIDR=${iface.cidr}`;
+            output += `\n`;
+        });
+    } else {
+        output += `No data available\n`;
+    }
+
+    // Top Processes
+    output += `\n--- Top Processes ---\n`;
+    if (data.processList && data.processList.length > 0) {
+        const isLinux = data.processList[0] && data.processList[0].cpu !== undefined;
+        if (isLinux) {
+            output += `${'Name'.padEnd(25)} ${'PID'.padEnd(8)} ${'CPU'.padEnd(8)} ${'Memory'}\n`;
+            output += `${'-'.repeat(55)}\n`;
+        } else {
+            output += `${'Name'.padEnd(25)} ${'PID'.padEnd(8)} ${'Memory'}\n`;
+            output += `${'-'.repeat(45)}\n`;
+        }
+        data.processList.slice(0, 20).forEach(proc => {
+            const name = (proc.name || 'Unknown').substring(0, 24).padEnd(25);
+            const pid = String(proc.pid || '0').padEnd(8);
+            if (isLinux) {
+                const cpu = (proc.cpu || '0%').padEnd(8);
+                const mem = proc.memory || '0%';
+                output += `${name} ${pid} ${cpu} ${mem}\n`;
+            } else {
+                const mem = proc.memory || '0 KB';
+                output += `${name} ${pid} ${mem}\n`;
+            }
+        });
+        if (data.processList.length > 20) {
+            output += `... and ${data.processList.length - 20} more processes\n`;
+        }
+    } else {
+        output += `No data available\n`;
+    }
+
+    // Copy to clipboard
+    window.pywebview.api.clipboard_copy(output);
+
+    // Show notification
+    showSyncNotification('System data copied');
+}
 
 async function initializeSystemMonitor() {
     console.log('Initializing system monitor...');
@@ -2628,16 +2603,19 @@ async function loadSystemInfo() {
     try {
         const response = await window.pywebview.api.get_system_info(currentSessionId);
         const result = JSON.parse(response);
-        
+
         if (result.success) {
+            systemMonitorData.systemInfo = result.info;
             displaySystemInfo(result.info);
         } else {
-            document.getElementById('systemInfo').innerHTML = 
+            systemMonitorData.systemInfo = null;
+            document.getElementById('systemInfo').innerHTML =
                 `<div class="error-message">Error: ${result.error}</div>`;
         }
     } catch (error) {
         console.error('Error loading system info:', error);
-        document.getElementById('systemInfo').innerHTML = 
+        systemMonitorData.systemInfo = null;
+        document.getElementById('systemInfo').innerHTML =
             '<div class="error-message">Failed to load system information</div>';
     }
 }
@@ -2646,16 +2624,19 @@ async function loadSystemStats() {
     try {
         const response = await window.pywebview.api.get_system_stats(currentSessionId);
         const result = JSON.parse(response);
-        
+
         if (result.success) {
+            systemMonitorData.systemStats = result.stats;
             displaySystemStats(result.stats);
         } else {
-            document.getElementById('systemStats').innerHTML = 
+            systemMonitorData.systemStats = null;
+            document.getElementById('systemStats').innerHTML =
                 `<div class="error-message">Error: ${result.error}</div>`;
         }
     } catch (error) {
         console.error('Error loading system stats:', error);
-        document.getElementById('systemStats').innerHTML = 
+        systemMonitorData.systemStats = null;
+        document.getElementById('systemStats').innerHTML =
             '<div class="error-message">Failed to load system statistics</div>';
     }
 }
@@ -2664,16 +2645,19 @@ async function loadProcessList() {
     try {
         const response = await window.pywebview.api.get_process_list(currentSessionId);
         const result = JSON.parse(response);
-        
+
         if (result.success) {
+            systemMonitorData.processList = result.processes;
             displayProcessList(result.processes);
         } else {
-            document.getElementById('processList').innerHTML = 
+            systemMonitorData.processList = null;
+            document.getElementById('processList').innerHTML =
                 `<div class="error-message">Error: ${result.error}</div>`;
         }
     } catch (error) {
         console.error('Error loading process list:', error);
-        document.getElementById('processList').innerHTML = 
+        systemMonitorData.processList = null;
+        document.getElementById('processList').innerHTML =
             '<div class="error-message">Failed to load process list</div>';
     }
 }
@@ -2682,16 +2666,19 @@ async function loadDiskUsage() {
     try {
         const response = await window.pywebview.api.get_disk_usage(currentSessionId);
         const result = JSON.parse(response);
-        
+
         if (result.success) {
+            systemMonitorData.diskUsage = result.disk_usage;
             displayDiskUsage(result.disk_usage);
         } else {
-            document.getElementById('diskUsage').innerHTML = 
+            systemMonitorData.diskUsage = null;
+            document.getElementById('diskUsage').innerHTML =
                 `<div class="error-message">Error: ${result.error}</div>`;
         }
     } catch (error) {
         console.error('Error loading disk usage:', error);
-        document.getElementById('diskUsage').innerHTML = 
+        systemMonitorData.diskUsage = null;
+        document.getElementById('diskUsage').innerHTML =
             '<div class="error-message">Failed to load disk usage</div>';
     }
 }
@@ -2700,16 +2687,19 @@ async function loadNetworkInfo() {
     try {
         const response = await window.pywebview.api.get_network_info(currentSessionId);
         const result = JSON.parse(response);
-        
+
         if (result.success) {
+            systemMonitorData.networkInfo = result.network_info;
             displayNetworkInfo(result.network_info);
         } else {
-            document.getElementById('networkInfo').innerHTML = 
+            systemMonitorData.networkInfo = null;
+            document.getElementById('networkInfo').innerHTML =
                 `<div class="error-message">Error: ${result.error}</div>`;
         }
     } catch (error) {
         console.error('Error loading network info:', error);
-        document.getElementById('networkInfo').innerHTML = 
+        systemMonitorData.networkInfo = null;
+        document.getElementById('networkInfo').innerHTML =
             '<div class="error-message">Failed to load network information</div>';
     }
 }
