@@ -7,13 +7,15 @@ from pathlib import Path
 
 class Config:
     """Centralized configuration management."""
-    
+
     def __init__(self):
         self.app_name = "prismssh"
-        self.config_dir = Path.home() / f".{self.app_name}"
-        self.connections_file = self.config_dir / "connections.json"
-        self.key_file = self.config_dir / ".key"
-        self.log_file = self.config_dir / "prismssh.log"
+        # Store paths as strings to avoid pywebview serialization issues
+        self._config_dir = Path.home() / f".{self.app_name}"
+        self.config_dir = str(self._config_dir)
+        self.connections_file = str(self._config_dir / "connections.json")
+        self.key_file = str(self._config_dir / ".key")
+        self.log_file = str(self._config_dir / "prismssh.log")
         
         # Default settings
         self.default_port = 22
@@ -40,7 +42,7 @@ class Config:
     def ensure_config_dir(self) -> bool:
         """Ensure configuration directory exists."""
         try:
-            self.config_dir.mkdir(mode=self.config_dir_permissions, exist_ok=True)
+            self._config_dir.mkdir(mode=self.config_dir_permissions, exist_ok=True)
             return True
         except Exception as e:
             print(f"Error creating config directory: {e}")

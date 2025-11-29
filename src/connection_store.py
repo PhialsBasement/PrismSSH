@@ -56,9 +56,9 @@ class ConnectionStore:
     def _ensure_config_dir(self) -> bool:
         """Create config directory if it doesn't exist."""
         try:
-            self.config.config_dir.mkdir(
-                mode=self.config.config_dir_permissions, 
-                parents=True, 
+            Path(self.config.config_dir).mkdir(
+                mode=self.config.config_dir_permissions,
+                parents=True,
                 exist_ok=True
             )
             return True
@@ -72,9 +72,9 @@ class ConnectionStore:
             return None
             
         try:
-            key_info_file = self.config.config_dir / ".key_info"
-            
-            if self.config.key_file.exists() and key_info_file.exists():
+            key_info_file = Path(self.config.config_dir) / ".key_info"
+
+            if Path(self.config.key_file).exists() and key_info_file.exists():
                 # Load existing key and salt
                 with open(self.config.key_file, 'rb') as f:
                     key = f.read()
@@ -148,7 +148,7 @@ class ConnectionStore:
     
     def load_connections(self) -> Dict[str, Any]:
         """Load all saved connections."""
-        if not self.config.connections_file.exists():
+        if not Path(self.config.connections_file).exists():
             return {}
         
         try:

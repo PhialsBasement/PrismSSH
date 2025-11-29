@@ -61,7 +61,7 @@ class SSHClient:
     
     def _load_known_hosts(self):
         """Load known hosts file."""
-        known_hosts_file = self.config.config_dir / "known_hosts"
+        known_hosts_file = Path(self.config.config_dir) / "known_hosts"
         try:
             if known_hosts_file.exists():
                 self.client.load_host_keys(str(known_hosts_file))
@@ -73,10 +73,10 @@ class SSHClient:
     
     def _save_known_hosts(self):
         """Save known hosts file."""
-        known_hosts_file = self.config.config_dir / "known_hosts"
+        known_hosts_file = Path(self.config.config_dir) / "known_hosts"
         try:
             # Ensure config directory exists
-            self.config.config_dir.mkdir(parents=True, exist_ok=True)
+            Path(self.config.config_dir).mkdir(parents=True, exist_ok=True)
             self.client.save_host_keys(str(known_hosts_file))
             known_hosts_file.chmod(0o600)  # Secure permissions
             self.logger.info("Saved known hosts file")

@@ -391,20 +391,23 @@ class PrismSSHAPI:
                 if system == 'windows':
                     # Use 'start /wait' to wait for the editor to close
                     subprocess.run(['cmd', '/c', 'start', '/wait', '', file_path], shell=False)
+                    self.logger.info(f"Editor closed for: {file_path}")
+                    self._cleanup_edit_session(file_path)
                 elif system == 'darwin':
                     # Use 'open -W' to wait for the application to close
                     subprocess.run(['open', '-W', file_path])
+                    self.logger.info(f"Editor closed for: {file_path}")
+                    self._cleanup_edit_session(file_path)
                 else:
-                    # Use xdg-open, but it doesn't wait, so we can't track easily
-                    subprocess.run(['xdg-open', file_path])
-
-                self.logger.info(f"Editor closed for: {file_path}")
-
-                # Clean up after editor closes
-                self._cleanup_edit_session(file_path)
+                    # Linux: xdg-open doesn't wait, so just open and let file watcher handle syncing
+                    # Don't auto-cleanup - user must manually close or we rely on file watcher
+                    subprocess.Popen(['xdg-open', file_path],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+                    # Don't cleanup on Linux - file watcher handles sync, cleanup happens on disconnect
 
             except Exception as e:
-                self.logger.error(f"Error waiting for editor: {e}")
+                self.logger.error(f"Error opening editor: {e}")
 
         try:
             # Run in background thread so we don't block
@@ -944,31 +947,62 @@ class PrismSSHAPI:
 
     def _handle_host_key_verification(self, hostname: str, key_type: str, fingerprint: str) -> bool:
         """Handle host key verification internally."""
-        # Store verification details
+        import time
+
+        # Store verification details for the JS UI to pick up
         verification_id = f"{hostname}_{key_type}"
         self.pending_verifications[verification_id] = {
             'hostname': hostname,
             'key_type': key_type,
             'fingerprint': fingerprint,
-            'verified': False
+            'verified': False,
+            'rejected': False
         }
-        
+
+        self.logger.info(f"Host key verification required for {hostname} ({key_type}): {fingerprint}")
+
+        # Notify the JS frontend to show the modal
+        if self.window:
+            try:
+                self.window.evaluate_js(f'''
+                    (function() {{
+                        if (typeof showHostKeyVerificationModal === 'function') {{
+                            showHostKeyVerificationModal({{
+                                hostname: "{hostname}",
+                                key_type: "{key_type}",
+                                fingerprint: "{fingerprint}",
+                                verification_id: "{verification_id}"
+                            }}).then(function(accepted) {{
+                                window.pywebview.api.verify_host_key("{verification_id}", accepted);
+                            }});
+                        }} else {{
+                            console.error('showHostKeyVerificationModal function not found');
+                            window.pywebview.api.verify_host_key("{verification_id}", true);
+                        }}
+                    }})();
+                ''')
+            except Exception as e:
+                self.logger.error(f"Failed to show host key modal: {e}")
+                return True  # Auto-accept if modal fails
+
         # Wait for user verification (with timeout)
-        import time
-        timeout = 60  # 60 seconds timeout
+        timeout = 120  # 2 minutes timeout
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout:
             if verification_id in self.pending_verifications:
                 if self.pending_verifications[verification_id].get('verified'):
                     del self.pending_verifications[verification_id]
+                    self.logger.info(f"Host key accepted for {hostname}")
                     return True
                 elif self.pending_verifications[verification_id].get('rejected'):
                     del self.pending_verifications[verification_id]
+                    self.logger.info(f"Host key rejected for {hostname}")
                     return False
             time.sleep(0.1)
-        
-        # Timeout - reject
+
+        # Timeout - clean up and reject
+        self.logger.warning(f"Host key verification timed out for {hostname}")
         if verification_id in self.pending_verifications:
             del self.pending_verifications[verification_id]
         return False

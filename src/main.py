@@ -2,8 +2,14 @@
 
 import sys
 import os
-import webview
+import platform
 from pathlib import Path
+
+# Force GTK backend on Linux to avoid PyQt5/Python 3.13 compatibility issues
+if platform.system() == 'Linux' and 'PYWEBVIEW_GUI' not in os.environ:
+    os.environ['PYWEBVIEW_GUI'] = 'gtk'
+
+import webview
 
 # Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -105,7 +111,7 @@ def main():
         sys.exit(1)
     
     # Check if connections file exists
-    if config.connections_file.exists():
+    if Path(config.connections_file).exists():
         logger.info(f"Found existing connections file: {config.connections_file}")
         try:
             import json
