@@ -287,17 +287,66 @@ class SSHSession:
             self.logger.error(f"Error renaming {old_path} to {new_path}: {e}")
             raise SFTPError(f"Failed to rename file: {str(e)}")
     
-    def upload_file_content(self, file_content: bytes, remote_path: str) -> bool:
-        """Upload file content directly via SFTP."""
+    def upload_file_content(self, file_content: bytes, remote_path: str, progress_callback=None) -> bool:
+        """Upload file content directly via SFTP with progress tracking."""
         if not self.sftp:
             raise SFTPError("SFTP not available")
-        
+
         try:
-            import io
-            file_like = io.BytesIO(file_content)
-            self.sftp.putfo(file_like, remote_path)
-            self.logger.info(f"Uploaded content to {remote_path}")
+            import tempfile
+            import os
+
+            file_size = len(file_content)
+            self.logger.info(f"Uploading content to {remote_path} ({file_size} bytes)")
+
+            # Write content to temp file for SFTP put with progress callback
+            temp_fd, temp_path = tempfile.mkstemp()
+
+            try:
+                with os.fdopen(temp_fd, 'wb') as temp_file:
+                    temp_file.write(file_content)
+
+                # Progress tracking with cancellation support
+                cancelled = [False]
+
+                def sftp_progress_callback(transferred, total):
+                    if progress_callback and total > 0:
+                        progress_percent = (transferred / total) * 100
+                        try:
+                            progress_callback(transferred, total, progress_percent)
+                        except Exception as e:
+                            if "cancelled" in str(e).lower():
+                                cancelled[0] = True
+                                raise Exception("Upload cancelled by user")
+
+                # Use native SFTP put with progress callback
+                if progress_callback:
+                    try:
+                        self.sftp.put(temp_path, remote_path, callback=sftp_progress_callback)
+                    except Exception as e:
+                        if cancelled[0] or "cancelled" in str(e).lower():
+                            self.logger.info("Upload cancelled by user")
+                            raise SFTPError("Upload cancelled by user")
+                        raise
+                else:
+                    self.sftp.put(temp_path, remote_path)
+
+                # Final progress update
+                if progress_callback:
+                    progress_callback(file_size, file_size, 100.0)
+
+            finally:
+                # Clean up temp file
+                try:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                except Exception as cleanup_error:
+                    self.logger.warning(f"Failed to cleanup temp file {temp_path}: {cleanup_error}")
+
+            self.logger.info(f"Successfully uploaded {file_size} bytes to {remote_path}")
             return True
+        except SFTPError:
+            raise
         except Exception as e:
             self.logger.error(f"Error uploading content to {remote_path}: {e}")
             raise SFTPError(f"Failed to upload file content: {str(e)}")

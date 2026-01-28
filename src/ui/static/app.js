@@ -253,67 +253,40 @@ async function handleFileSelect(event) {
     }
 }
 
+// Format bytes to human readable string
+function formatBytes(bytes, decimals = 1) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
+}
+
+// Generate unique upload ID
+function generateUploadId() {
+    return 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+// Add File objects to upload queue (from Browse button)
 async function uploadFiles(files) {
     if (!currentSessionId || !sessions[currentSessionId]) {
         alert('Please connect to a server first');
         return;
     }
-    
-    console.log('Uploading', files.length, 'files...');
-    
-    // Show upload progress
-    const progressDiv = document.getElementById('uploadProgress');
-    progressDiv.style.display = 'block';
-    
-    let uploadedCount = 0;
-    const totalFiles = files.length;
-    
-    try {
-        for (const file of files) {
-            const remotePath = currentPath.endsWith('/') ? 
-                currentPath + file.name : 
-                currentPath + '/' + file.name;
-            
-            console.log('Uploading:', file.name, 'to', remotePath);
-            
-            // Read file as base64
-            const fileContent = await readFileAsBase64(file);
-            
-            // Upload via API
-            const result = await window.pywebview.api.upload_file_content(
-                currentSessionId, 
-                fileContent, 
-                remotePath
-            );
-            
-            const response = JSON.parse(result);
-            if (response.success) {
-                uploadedCount++;
-                console.log('Successfully uploaded:', file.name);
-            } else {
-                console.error('Failed to upload:', file.name, response.error);
-                alert(`Failed to upload ${file.name}: ${response.error}`);
-            }
-            
-            // Update progress
-            const progress = (uploadedCount / totalFiles) * 100;
-            document.getElementById('uploadBar').style.width = `${progress}%`;
-        }
-        
-        console.log(`Upload complete: ${uploadedCount}/${totalFiles} files uploaded`);
-        
-        // Refresh file list
-        await listFiles(currentPath);
-        
-    } catch (error) {
-        console.error('Upload error:', error);
-        alert('Upload failed: ' + error.message);
-    } finally {
-        // Hide progress after a delay
-        setTimeout(() => {
-            progressDiv.style.display = 'none';
-            document.getElementById('uploadBar').style.width = '0%';
-        }, 2000);
+
+    // Read files as base64 and add to queue
+    for (const file of files) {
+        const remotePath = currentPath.endsWith('/') ?
+            currentPath + file.name :
+            currentPath + '/' + file.name;
+        const fileContent = await readFileAsBase64(file);
+        uploadQueue.push({ fileContent, remotePath, fileName: file.name, isBase64: true });
+    }
+
+    console.log(`Added ${files.length} files to queue. Queue size: ${uploadQueue.length}`);
+
+    if (!isProcessingUploads) {
+        processUploadQueue();
     }
 }
 
@@ -330,28 +303,239 @@ function readFileAsBase64(file) {
     });
 }
 
+// Upload queue system
+let uploadQueue = [];
+let isProcessingUploads = false;
+
+// Add files to upload queue
+function uploadFilesFromPaths(filePaths) {
+    if (!currentSessionId || !sessions[currentSessionId]) {
+        alert('Please connect to a server first');
+        return;
+    }
+
+    // Add to queue
+    for (const localPath of filePaths) {
+        const fileName = localPath.split('/').pop();
+        const remotePath = currentPath.endsWith('/') ?
+            currentPath + fileName :
+            currentPath + '/' + fileName;
+        uploadQueue.push({ localPath, remotePath, fileName });
+    }
+
+    console.log(`Added ${filePaths.length} files to queue. Queue size: ${uploadQueue.length}`);
+
+    // Start processing if not already
+    if (!isProcessingUploads) {
+        processUploadQueue();
+    }
+}
+
+// Process upload queue
+async function processUploadQueue() {
+    if (isProcessingUploads || uploadQueue.length === 0) return;
+
+    isProcessingUploads = true;
+
+    const progressDiv = document.getElementById('uploadProgress');
+    const statusText = document.getElementById('uploadStatusText');
+    const uploadBar = document.getElementById('uploadBar');
+    const uploadBytes = document.getElementById('uploadBytes');
+    const uploadSpeed = document.getElementById('uploadSpeed');
+
+    progressDiv.style.display = 'block';
+
+    let uploadedCount = 0;
+    let failedCount = 0;
+
+    while (uploadQueue.length > 0) {
+        const item = uploadQueue.shift();
+        const { remotePath, fileName } = item;
+        const queueRemaining = uploadQueue.length;
+
+        statusText.textContent = queueRemaining > 0
+            ? `Uploading ${fileName} (${queueRemaining} queued)...`
+            : `Uploading ${fileName}...`;
+
+        const uploadId = generateUploadId();
+
+        try {
+            let startResult;
+            if (item.isBase64) {
+                // Browse button upload (base64 content)
+                startResult = await window.pywebview.api.start_upload_with_progress(
+                    currentSessionId,
+                    item.fileContent,
+                    remotePath,
+                    uploadId
+                );
+            } else {
+                // Drag-drop upload (local path)
+                startResult = await window.pywebview.api.upload_from_path_with_progress(
+                    currentSessionId,
+                    item.localPath,
+                    remotePath,
+                    uploadId
+                );
+            }
+
+            const startResponse = JSON.parse(startResult);
+            if (!startResponse.success) {
+                console.error('Failed to start upload:', fileName, startResponse.error);
+                failedCount++;
+                continue;
+            }
+
+            // Poll for progress
+            let completed = false;
+            let lastBytes = 0;
+            let lastTime = Date.now();
+
+            while (!completed) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                const progressResult = await window.pywebview.api.get_upload_progress(
+                    currentSessionId,
+                    uploadId
+                );
+                const progress = JSON.parse(progressResult);
+
+                if (progress.status === 'uploading' || progress.status === 'starting') {
+                    uploadBar.style.width = `${progress.percentage}%`;
+                    uploadBytes.textContent = `${formatBytes(progress.uploaded)} / ${formatBytes(progress.total)}`;
+
+                    const now = Date.now();
+                    const timeDiff = (now - lastTime) / 1000;
+                    if (timeDiff >= 0.5) {
+                        const bytesDiff = progress.uploaded - lastBytes;
+                        const speed = bytesDiff / timeDiff;
+                        uploadSpeed.textContent = speed > 0 ? `${formatBytes(speed)}/s` : '';
+                        lastBytes = progress.uploaded;
+                        lastTime = now;
+                    }
+
+                    const queueNow = uploadQueue.length;
+                    statusText.textContent = queueNow > 0
+                        ? `Uploading ${fileName} (${queueNow} queued)...`
+                        : `Uploading ${fileName}...`;
+
+                } else if (progress.status === 'completed') {
+                    uploadBar.style.width = '100%';
+                    uploadBytes.textContent = `${formatBytes(progress.total)} / ${formatBytes(progress.total)}`;
+                    uploadSpeed.textContent = '';
+                    uploadedCount++;
+                    completed = true;
+                    console.log('Successfully uploaded:', fileName);
+                } else if (progress.status === 'error' || progress.status === 'cancelled') {
+                    completed = true;
+                    failedCount++;
+                    console.error('Upload failed:', fileName, progress.error || progress.status);
+                } else if (progress.status === 'unknown') {
+                    completed = true;
+                    uploadedCount++;
+                }
+            }
+
+            await window.pywebview.api.clear_upload_progress(currentSessionId, uploadId);
+            uploadBar.style.width = '0%';
+
+        } catch (error) {
+            console.error('Upload error for', fileName, error);
+            failedCount++;
+        }
+    }
+
+    console.log(`Upload complete: ${uploadedCount} succeeded, ${failedCount} failed`);
+    statusText.textContent = failedCount > 0
+        ? `Done: ${uploadedCount} uploaded, ${failedCount} failed`
+        : `Uploaded ${uploadedCount} file${uploadedCount !== 1 ? 's' : ''}`;
+
+    await listFiles(currentPath);
+
+    isProcessingUploads = false;
+
+    setTimeout(() => {
+        if (!isProcessingUploads && uploadQueue.length === 0) {
+            progressDiv.style.display = 'none';
+            uploadBar.style.width = '0%';
+            uploadBytes.textContent = '';
+            uploadSpeed.textContent = '';
+        }
+    }, 2000);
+}
+
+// Handle native file drop from pywebview (receives full file paths)
+async function handleNativeFileDrop(filePaths) {
+    console.log('Native file drop received:', filePaths);
+    if (filePaths && filePaths.length > 0) {
+        await uploadFilesFromPaths(filePaths);
+    }
+}
+
 // Drag and drop support
 const setupDragDrop = () => {
     const uploadArea = document.getElementById('uploadArea');
-    if (!uploadArea) return;
-    
-    uploadArea.addEventListener('dragover', (e) => {
+    if (!uploadArea) {
+        console.error('uploadArea element not found!');
+        return;
+    }
+    console.log('Setting up drag and drop on uploadArea');
+
+    // Prevent browser from opening files when dropped anywhere on the page
+    document.addEventListener('dragover', (e) => {
         e.preventDefault();
+    });
+    document.addEventListener('drop', (e) => {
+        console.log('Document drop event - preventing default');
+        e.preventDefault();
+    });
+
+    uploadArea.addEventListener('dragenter', (e) => {
+        console.log('dragenter on uploadArea');
+        e.preventDefault();
+        e.stopPropagation();
         uploadArea.classList.add('dragover');
     });
-    
-    uploadArea.addEventListener('dragleave', () => {
+
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadArea.classList.add('dragover');
+    });
+
+    uploadArea.addEventListener('dragleave', (e) => {
+        console.log('dragleave on uploadArea');
+        e.preventDefault();
+        e.stopPropagation();
         uploadArea.classList.remove('dragover');
     });
-    
+
     uploadArea.addEventListener('drop', async (e) => {
         e.preventDefault();
+        e.stopPropagation();
         uploadArea.classList.remove('dragover');
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            console.log('Dropped files:', files);
+
+        const dt = e.dataTransfer;
+        const files = dt?.files;
+        const htmlData = dt?.getData('text/html') || '';
+
+        // Standard files API
+        if (files && files.length > 0) {
             await uploadFiles(Array.from(files));
+            return;
         }
+
+        // WebKitGTK/Linux: extract file:// URLs from HTML
+        if (htmlData.includes('file://')) {
+            const matches = htmlData.match(/file:\/\/[^"'<>\s\]]+/g);
+            if (matches && matches.length > 0) {
+                const paths = [...new Set(matches)].map(uri => decodeURIComponent(uri.replace('file://', '')));
+                await uploadFilesFromPaths(paths);
+                return;
+            }
+        }
+
+        console.log('No files in drop - use Browse for multiple files');
     });
 };
 

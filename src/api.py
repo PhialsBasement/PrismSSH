@@ -34,6 +34,10 @@ class PrismSSHAPI:
         # Track download progress and cancellation
         self.download_progress = {}
         self.download_cancellations = {}
+
+        # Track upload progress and cancellation
+        self.upload_progress = {}
+        self.upload_cancellations = {}
         
         # Set up file watcher for edited files
         try:
@@ -277,12 +281,12 @@ class PrismSSHAPI:
             return json.dumps({'success': False, 'error': str(e)})
     
     def upload_file_content(self, session_id: str, file_content: str, remote_path: str) -> str:
-        """Upload file content via SFTP."""
+        """Upload file content via SFTP (simple, no progress)."""
         try:
             session = self.session_manager.get_session(session_id)
             if not session:
                 return json.dumps({'success': False, 'error': 'Session not found'})
-            
+
             # Decode base64 content
             import base64
             file_bytes = base64.b64decode(file_content)
@@ -291,7 +295,190 @@ class PrismSSHAPI:
         except Exception as e:
             self.logger.error(f"API: Error uploading file content to {remote_path}: {e}")
             return json.dumps({'success': False, 'error': str(e)})
-    
+
+    def start_upload_with_progress(self, session_id: str, file_content: str, remote_path: str, upload_id: str) -> str:
+        """Start an upload with progress tracking in a background thread."""
+        try:
+            import threading
+            import base64
+
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+
+            # Decode base64 content
+            file_bytes = base64.b64decode(file_content)
+            file_size = len(file_bytes)
+
+            # Initialize progress tracking
+            progress_key = f"{session_id}:{upload_id}"
+            self.upload_progress[progress_key] = {
+                'uploaded': 0,
+                'total': file_size,
+                'percentage': 0,
+                'status': 'starting',
+                'error': None,
+                'filename': remote_path.split('/')[-1]
+            }
+            self.upload_cancellations[progress_key] = False
+
+            def progress_callback(uploaded, total, percentage):
+                # Check for cancellation
+                if self.upload_cancellations.get(progress_key, False):
+                    self.upload_progress[progress_key]['status'] = 'cancelled'
+                    raise Exception("Upload cancelled by user")
+
+                self.upload_progress[progress_key] = {
+                    'uploaded': uploaded,
+                    'total': total,
+                    'percentage': percentage,
+                    'status': 'uploading',
+                    'error': None,
+                    'filename': remote_path.split('/')[-1]
+                }
+
+            def upload_thread():
+                try:
+                    self.upload_progress[progress_key]['status'] = 'uploading'
+                    success = session.upload_file_content(file_bytes, remote_path, progress_callback)
+
+                    if not self.upload_cancellations.get(progress_key, False):
+                        if success:
+                            self.upload_progress[progress_key].update({
+                                'status': 'completed',
+                                'percentage': 100,
+                                'uploaded': file_size
+                            })
+                        else:
+                            self.upload_progress[progress_key].update({
+                                'status': 'error',
+                                'error': 'Upload failed'
+                            })
+                except Exception as e:
+                    if 'cancelled' not in str(e).lower():
+                        self.upload_progress[progress_key].update({
+                            'status': 'error',
+                            'error': str(e)
+                        })
+
+            # Start upload in background thread
+            thread = threading.Thread(target=upload_thread, daemon=True)
+            thread.start()
+
+            return json.dumps({'success': True, 'upload_id': upload_id, 'total_size': file_size})
+
+        except Exception as e:
+            self.logger.error(f"API: Error starting upload with progress: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+
+    def get_upload_progress(self, session_id: str, upload_id: str) -> str:
+        """Get upload progress for a specific upload."""
+        progress_key = f"{session_id}:{upload_id}"
+        progress = self.upload_progress.get(progress_key, {
+            'uploaded': 0,
+            'total': 0,
+            'percentage': 0,
+            'status': 'unknown',
+            'error': None
+        })
+        return json.dumps(progress)
+
+    def cancel_upload(self, session_id: str, upload_id: str) -> str:
+        """Cancel an in-progress upload."""
+        progress_key = f"{session_id}:{upload_id}"
+        self.upload_cancellations[progress_key] = True
+        return json.dumps({'success': True})
+
+    def clear_upload_progress(self, session_id: str, upload_id: str) -> str:
+        """Clear upload progress tracking after completion."""
+        progress_key = f"{session_id}:{upload_id}"
+        if progress_key in self.upload_progress:
+            del self.upload_progress[progress_key]
+        if progress_key in self.upload_cancellations:
+            del self.upload_cancellations[progress_key]
+        return json.dumps({'success': True})
+
+    def upload_from_path_with_progress(self, session_id: str, local_path: str, remote_path: str, upload_id: str) -> str:
+        """Upload a file from local path with progress tracking (for Linux drag-drop)."""
+        try:
+            import threading
+            import os
+
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return json.dumps({'success': False, 'error': 'Session not found'})
+
+            # Check file exists and get size
+            if not os.path.isfile(local_path):
+                return json.dumps({'success': False, 'error': f'File not found: {local_path}'})
+
+            file_size = os.path.getsize(local_path)
+            file_name = os.path.basename(local_path)
+
+            # Initialize progress tracking
+            progress_key = f"{session_id}:{upload_id}"
+            self.upload_progress[progress_key] = {
+                'uploaded': 0,
+                'total': file_size,
+                'percentage': 0,
+                'status': 'starting',
+                'error': None,
+                'filename': file_name
+            }
+            self.upload_cancellations[progress_key] = False
+
+            def progress_callback(uploaded, total, percentage):
+                if self.upload_cancellations.get(progress_key, False):
+                    self.upload_progress[progress_key]['status'] = 'cancelled'
+                    raise Exception("Upload cancelled by user")
+
+                self.upload_progress[progress_key] = {
+                    'uploaded': uploaded,
+                    'total': total,
+                    'percentage': percentage,
+                    'status': 'uploading',
+                    'error': None,
+                    'filename': file_name
+                }
+
+            def upload_thread():
+                try:
+                    self.upload_progress[progress_key]['status'] = 'uploading'
+
+                    # Read file and upload with progress
+                    with open(local_path, 'rb') as f:
+                        file_content = f.read()
+
+                    success = session.upload_file_content(file_content, remote_path, progress_callback)
+
+                    if not self.upload_cancellations.get(progress_key, False):
+                        if success:
+                            self.upload_progress[progress_key].update({
+                                'status': 'completed',
+                                'percentage': 100,
+                                'uploaded': file_size
+                            })
+                        else:
+                            self.upload_progress[progress_key].update({
+                                'status': 'error',
+                                'error': 'Upload failed'
+                            })
+                except Exception as e:
+                    if 'cancelled' not in str(e).lower():
+                        self.upload_progress[progress_key].update({
+                            'status': 'error',
+                            'error': str(e)
+                        })
+
+            thread = threading.Thread(target=upload_thread, daemon=True)
+            thread.start()
+
+            return json.dumps({'success': True, 'upload_id': upload_id, 'total_size': file_size})
+
+        except Exception as e:
+            self.logger.error(f"API: Error starting path upload: {e}")
+            return json.dumps({'success': False, 'error': str(e)})
+
     def download_file_content(self, session_id: str, remote_path: str) -> str:
         """Download file content via SFTP."""
         try:

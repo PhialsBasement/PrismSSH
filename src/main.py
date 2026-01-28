@@ -3,6 +3,7 @@
 import sys
 import os
 import platform
+import json
 from pathlib import Path
 
 # Force GTK backend on Linux to avoid PyQt5/Python 3.13 compatibility issues

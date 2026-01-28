@@ -175,9 +175,13 @@
                                 
                                 <!-- Upload Progress -->
                                 <div id="uploadProgress" style="display: none; margin-top: 10px;">
-                                    <div style="font-size: 12px; margin-bottom: 5px;">Uploading...</div>
-                                    <div style="background: rgba(255, 255, 255, 0.1); border-radius: 4px; height: 6px;">
-                                        <div id="uploadBar" style="background: #00d4ff; height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
+                                    <div id="uploadStatusText" style="font-size: 12px; margin-bottom: 5px;">Uploading...</div>
+                                    <div style="background: rgba(255, 255, 255, 0.1); border-radius: 4px; height: 6px; margin-bottom: 4px;">
+                                        <div id="uploadBar" style="background: #00d4ff; height: 100%; border-radius: 4px; width: 0%; transition: width 0.2s;"></div>
+                                    </div>
+                                    <div id="uploadDetails" style="font-size: 11px; color: rgba(255, 255, 255, 0.6); display: flex; justify-content: space-between;">
+                                        <span id="uploadBytes">0 B / 0 B</span>
+                                        <span id="uploadSpeed"></span>
                                     </div>
                                 </div>
                             </div>
