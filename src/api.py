@@ -1378,13 +1378,33 @@ class PrismSSHAPI:
                 process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
                 process.communicate(text.encode('utf-8'))
             else:
-                # Try xclip or xsel on Linux
-                try:
-                    process = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
-                    process.communicate(text.encode('utf-8'))
-                except FileNotFoundError:
-                    process = subprocess.Popen(['xsel', '--clipboard', '--input'], stdin=subprocess.PIPE)
-                    process.communicate(text.encode('utf-8'))
+                # Try available clipboard tools on Linux
+                # Prioritize Wayland tools when running under Wayland
+                import os
+                if os.environ.get('WAYLAND_DISPLAY') or os.environ.get('XDG_SESSION_TYPE') == 'wayland':
+                    clipboard_cmds = [
+                        ['wl-copy'],
+                        ['xclip', '-selection', 'clipboard'],
+                        ['xsel', '--clipboard', '--input'],
+                    ]
+                else:
+                    clipboard_cmds = [
+                        ['xclip', '-selection', 'clipboard'],
+                        ['xsel', '--clipboard', '--input'],
+                        ['wl-copy'],
+                    ]
+                copied = False
+                for cmd in clipboard_cmds:
+                    try:
+                        process = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+                        process.communicate(text.encode('utf-8'))
+                        if process.returncode == 0:
+                            copied = True
+                            break
+                    except FileNotFoundError:
+                        continue
+                if not copied:
+                    return json.dumps({'success': False, 'error': 'No clipboard tool found. Install xclip, xsel, or wl-copy.'})
 
             return json.dumps({'success': True})
         except Exception as e:
@@ -1411,19 +1431,32 @@ class PrismSSHAPI:
                 result = subprocess.run(['pbpaste'], capture_output=True, text=True)
                 text = result.stdout
             else:
-                # Try xclip or xsel on Linux
-                try:
-                    result = subprocess.run(
+                # Try available clipboard tools on Linux
+                # Prioritize Wayland tools when running under Wayland
+                import os
+                if os.environ.get('WAYLAND_DISPLAY') or os.environ.get('XDG_SESSION_TYPE') == 'wayland':
+                    clipboard_cmds = [
+                        ['wl-paste', '--no-newline'],
                         ['xclip', '-selection', 'clipboard', '-o'],
-                        capture_output=True, text=True
-                    )
-                    text = result.stdout
-                except FileNotFoundError:
-                    result = subprocess.run(
                         ['xsel', '--clipboard', '--output'],
-                        capture_output=True, text=True
-                    )
-                    text = result.stdout
+                    ]
+                else:
+                    clipboard_cmds = [
+                        ['xclip', '-selection', 'clipboard', '-o'],
+                        ['xsel', '--clipboard', '--output'],
+                        ['wl-paste', '--no-newline'],
+                    ]
+                text = None
+                for cmd in clipboard_cmds:
+                    try:
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        if result.returncode == 0:
+                            text = result.stdout
+                            break
+                    except FileNotFoundError:
+                        continue
+                if text is None:
+                    return json.dumps({'success': False, 'error': 'No clipboard tool found. Install xclip, xsel, or wl-paste.'})
 
             return json.dumps({'success': True, 'text': text})
         except Exception as e:

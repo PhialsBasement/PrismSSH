@@ -7,6 +7,47 @@ let currentTool = null;
 let currentPath = '/';
 let isLoadingFiles = false;
 
+// Optimistic typing state
+let pendingEchoBuffer = [];
+const ECHO_TIMEOUT_MS = 2000;
+
+function isOptimisticChar(data) {
+    if (data.length !== 1) return false;
+    const code = data.charCodeAt(0);
+    if (code === 127) return true; // backspace
+    return code >= 32;
+}
+
+function stripPredictedEchoes(output) {
+    if (pendingEchoBuffer.length === 0) return output;
+
+    const now = Date.now();
+
+    while (pendingEchoBuffer.length > 0 && now - pendingEchoBuffer[0].time > ECHO_TIMEOUT_MS) {
+        pendingEchoBuffer.shift();
+    }
+
+    if (pendingEchoBuffer.length === 0) return output;
+
+    let outputPos = 0;
+    let matched = 0;
+
+    while (matched < pendingEchoBuffer.length && outputPos < output.length) {
+        if (output[outputPos] === pendingEchoBuffer[matched].char) {
+            outputPos++;
+            matched++;
+        } else {
+            break;
+        }
+    }
+
+    if (matched > 0) {
+        pendingEchoBuffer.splice(0, matched);
+    }
+
+    return output.substring(outputPos);
+}
+
 // Tool panel functions
 function openTool(toolName) {
     // Check if we have an active session
@@ -2316,10 +2357,30 @@ function createTerminalForSession(sessionId, hostname) {
         terminal.focus();
         
         // Handle input - ensure input goes to the correct session
-        terminal.onData(async (data) => {
-            // Only send input if this is the currently active session
+        terminal.onData((data) => {
             if (currentSessionId === sessionId) {
-                await window.pywebview.api.send_input(sessionId, data);
+                if (isOptimisticChar(data)) {
+                    if (data.charCodeAt(0) === 127) {
+                        // Only optimistic backspace if we have pending optimistic chars to undo
+                        const hasPendingChar = pendingEchoBuffer.some(e => e.char);
+                        if (hasPendingChar) {
+                            // Remove the last optimistic char from buffer
+                            for (let i = pendingEchoBuffer.length - 1; i >= 0; i--) {
+                                if (pendingEchoBuffer[i].char) {
+                                    pendingEchoBuffer.splice(i, 1);
+                                    break;
+                                }
+                            }
+                            terminal.write('\b \b');
+                        }
+                    } else {
+                        terminal.write(data);
+                        pendingEchoBuffer.push({ char: data, time: Date.now() });
+                    }
+                }
+                setTimeout(() => {
+                    window.pywebview.api.send_input(sessionId, data);
+                }, 0);
             }
         });
         
@@ -2367,7 +2428,10 @@ async function startOutputPolling(sessionId) {
                 // Get output
                 const result = JSON.parse(await window.pywebview.api.get_output(sessionId));
                 if (result.output) {
-                    currentTerminal.write(result.output);
+                    const filtered = stripPredictedEchoes(result.output);
+                    if (filtered.length > 0) {
+                        currentTerminal.write(filtered);
+                    }
                 }
                 
                 // Check session status
@@ -2494,6 +2558,7 @@ function switchToSession(sessionId) {
     
     const oldSessionId = currentSessionId;
     currentSessionId = sessionId;
+    pendingEchoBuffer = [];
     
     // Hide all terminal elements from previous sessions
     Object.keys(sessions).forEach(id => {
